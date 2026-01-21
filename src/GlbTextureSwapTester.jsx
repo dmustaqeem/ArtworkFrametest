@@ -465,10 +465,10 @@ export default function GlbTextureSwapTester() {
                 mat.clearcoat = 0.3; // Subtle clearcoat for premium glossy print look
                 mat.clearcoatRoughness = 0.2; // Smooth clearcoat
                 
-                if (envMapRef.current) {
-                  mat.envMap = envMapRef.current;
-                  mat.envMapIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
-                }
+                // DO NOT assign envMap directly - use scene.environment instead
+                // This allows scene.environmentRotation to work properly
+                mat.envMap = null;
+                mat.envMapIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
                 
                 // Make sure artwork map is treated as sRGB (color-accurate)
                 if (mat.map) {
@@ -519,10 +519,10 @@ export default function GlbTextureSwapTester() {
               acrylicMat.depthTest = true; // Explicit depth test for transparent stacking
               acrylicMat.side = THREE.DoubleSide; // Show both sides for thin plane
 
-              if (envMapRef.current) {
-                acrylicMat.envMap = envMapRef.current;
-                acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look
-              }
+              // DO NOT assign envMap directly - use scene.environment instead
+              // This allows scene.environmentRotation to work properly
+              acrylicMat.envMap = null;
+              acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look
 
               acrylicMat.needsUpdate = true;
 
@@ -538,11 +538,10 @@ export default function GlbTextureSwapTester() {
               if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
                 mat.roughness = mat.roughness !== undefined ? Math.min(mat.roughness, 0.5) : 0.4;
                 mat.metalness = mat.metalness !== undefined ? Math.max(mat.metalness, 0.6) : 0.7;
-                if (envMapRef.current && !mat.envMap) {
-                  mat.envMap = envMapRef.current;
-                  mat.envMapIntensity = 1.0;
-                  mat.needsUpdate = true;
-                }
+                // DO NOT assign envMap directly - use scene.environment instead
+                mat.envMap = null;
+                mat.envMapIntensity = 1.0;
+                mat.needsUpdate = true;
               }
             }
             // 5) Other meshes - Default to print-like (matte, opaque)
@@ -552,11 +551,10 @@ export default function GlbTextureSwapTester() {
                 mat.roughness = 0.85;
                 mat.transparent = false;
                 mat.opacity = 1.0;
-                if (envMapRef.current && !mat.envMap) {
-                  mat.envMap = envMapRef.current;
-                  mat.envMapIntensity = 0.6;
-                  mat.needsUpdate = true;
-                }
+                // DO NOT assign envMap directly - use scene.environment instead
+                mat.envMap = null;
+                mat.envMapIntensity = 0.6;
+                mat.needsUpdate = true;
               }
             }
             
