@@ -10,7 +10,7 @@ import TextureTransformModal from "./TextureTransformModal.jsx";
 // =========================
 // CONFIG
 // =========================
-const GLB_PATH = "/assets/models/Skateboard.glb";
+const GLB_PATH = "/assets/models/Surfboard.glb";
 const TEST_IMAGE_1_PATH = "/assets/frames/image1.jpg";
 const TEST_IMAGE_2_PATH = "/assets/frames/image2.jpeg";
 
@@ -34,12 +34,13 @@ export default function GlbTextureSwapTester() {
   const [error, setError] = useState("");
   const [materialSummary, setMaterialSummary] = useState(null); // { totalMeshes, totalMaterials, byType: { [type]: count } }
   const [lighting, setLighting] = useState({
-    exposure: 1.15, // WhiteWall-style: slightly increased for high-key look
+    exposure: 1.40, // Even brighter for WhiteWall-style high-key look
     ambient: 0.05, // WhiteWall-style: very low (reduced from 0.15 to avoid flat lighting)
     key: 0.45, // WhiteWall-style: subtle key light (reduced from 0.6)
     fill: 0.25, // WhiteWall-style: soft fill (reduced from 0.3)
     rim: 0.35, // WhiteWall-style: edge highlight (reduced from 0.4)
   });
+  const [envRotation, setEnvRotation] = useState(0); // HDRI / environment yaw (degrees)
   const [showLightingControls, setShowLightingControls] = useState(false);
   const [showReflections, setShowReflections] = useState(true); // Default to true for WhiteWall-style
   const envMapRef = useRef(null);
@@ -66,7 +67,9 @@ export default function GlbTextureSwapTester() {
 
     // Scene setup - WhiteWall-style high-key background
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xeeeeee); // Light studio grey
+    // For WhiteWall-style gradient background we keep the scene background transparent
+    // and render a CSS gradient behind the canvas.
+    scene.background = null;
     sceneRef.current = scene;
 
     // Camera
@@ -80,12 +83,15 @@ export default function GlbTextureSwapTester() {
     cameraRef.current = camera;
 
     // Renderer - WhiteWall-style settings
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // alpha: true so CSS gradient background shows through
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // Critical for print-accurate colors
     renderer.toneMappingExposure = lighting.exposure;
+    // Transparent clear color so CSS gradient is visible
+    renderer.setClearColor(0x000000, 0);
     
     // Enable shadows for WhiteWall-style grounding
     renderer.shadowMap.enabled = true;
@@ -434,12 +440,12 @@ export default function GlbTextureSwapTester() {
             });
 
             // ============================================================
-            // APPLY CORRECT MATERIAL PROPERTIES BASED ON MESH NAME
+            // APPLY CORRECT MATERIAL PROPERTIES BASED ON TYPE (MODEL-AGNOSTIC)
             // ============================================================
-            // WhiteWall-style: Specific mesh-based configuration
+            // WhiteWall-style: Detect print layer by having map texture and not being glass/frame
             
-            // 1) Front Print (Mesh_1 → Acrylic.001) - Make it look like a print, NOT metal
-            if (meshName === "Mesh_1") {
+            // 1) Front Print (any mesh with map texture that's not glass/frame) - Make it look like a print, NOT metal
+            if (finalIsPrint) {
               if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
                 // CRITICAL: Remove PBR maps that make artwork look dark/plastic
                 // Only keep the artwork map (color texture)
@@ -451,16 +457,17 @@ export default function GlbTextureSwapTester() {
                 // Reset color to white (no tinting)
                 mat.color.set(0xffffff);
                 
-                // Print material properties - slightly punchy (not too matte)
+                // Print material properties - WhiteWall vibrant, glossy look
                 mat.transparent = false;
                 mat.opacity = 1.0;
-                mat.metalness = 0.0; // NOT metal
-                mat.roughness = 0.65; // Less matte for WhiteWall-style (was 0.85)
-                mat.clearcoat = 0.0; // No clearcoat on print
+                mat.metalness = 0.0; // NOT metal (override bad GLB values)
+                mat.roughness = 0.25; // Much glossier for vibrant WhiteWall look (was 0.45)
+                mat.clearcoat = 0.3; // Subtle clearcoat for premium glossy print look
+                mat.clearcoatRoughness = 0.2; // Smooth clearcoat
                 
                 if (envMapRef.current) {
                   mat.envMap = envMapRef.current;
-                  mat.envMapIntensity = 0.15; // Low reflection but not zero (was 0.25)
+                  mat.envMapIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
                 }
                 
                 // Make sure artwork map is treated as sRGB (color-accurate)
@@ -473,8 +480,8 @@ export default function GlbTextureSwapTester() {
               // Set render order: print draws first
               obj.renderOrder = 1;
             }
-            // 2) Glass Cover (glass001 → glass) - Realistic acrylic using transmission
-            else if (meshName === "glass001" || meshName.toLowerCase() === "glass") {
+            // 2) Glass Cover (any mesh with "glass" in name) - Realistic acrylic using transmission
+            else if (isGlass) {
               // Ensure we use Physical material for transmission
               let acrylicMat = mat;
 
@@ -490,18 +497,19 @@ export default function GlbTextureSwapTester() {
               }
 
               // WhiteWall-style acrylic: transmission-based with tuned optical params
+              // Override bad GLB values (opacity-based transparency) with proper transmission
               acrylicMat.color = new THREE.Color(0xffffff);
               acrylicMat.transparent = true;
-              acrylicMat.transmission = 1.0; // Key: makes it transparent via refraction
-              acrylicMat.opacity = 1.0; // Keep 1.0 when using transmission
+              acrylicMat.transmission = 1.0; // Key: makes it transparent via refraction (not opacity)
+              acrylicMat.opacity = 1.0; // Keep 1.0 when using transmission (override bad GLB opacity=0.17)
               acrylicMat.ior = 1.49; // Acrylic index of refraction
-              acrylicMat.thickness = 0.06; // Increased for better refraction (try 0.04-0.08 based on scale)
-              acrylicMat.roughness = 0.04; // WhiteWall is pretty "clean" (was 0.08)
+              acrylicMat.thickness = 0.001; // Thickness for refraction (adjust based on model scale)
+              acrylicMat.roughness = 0.03; // WhiteWall is pretty "clean" (override bad GLB roughness=0)
               acrylicMat.metalness = 0.0;
 
               // Polished acrylic edge highlight
               acrylicMat.clearcoat = 1.0;
-              acrylicMat.clearcoatRoughness = 0.03; // Sharper highlights (was 0.08)
+              acrylicMat.clearcoatRoughness = 0.03; // Sharper highlights
 
               // Attenuation for realistic acrylic transmission
               acrylicMat.attenuationColor = new THREE.Color(0xffffff);
@@ -513,7 +521,7 @@ export default function GlbTextureSwapTester() {
 
               if (envMapRef.current) {
                 acrylicMat.envMap = envMapRef.current;
-                acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look (increased from 2.0)
+                acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look
               }
 
               acrylicMat.needsUpdate = true;
@@ -553,13 +561,13 @@ export default function GlbTextureSwapTester() {
             }
             
             // ============================================================
-            // TEXTURE LAYER DETECTION - ONLY MAP FOR ARTWORK
+            // TEXTURE LAYER DETECTION - ONLY MAP FOR ARTWORK (MODEL-AGNOSTIC)
             // ============================================================
             // CRITICAL: Only detect 'map' layers for artwork swapping
             // PBR maps (normal, roughness, metalness) should NOT be swappable
-            // Only front print (Mesh_1) should have swappable artwork layers
-            // Back mesh (Mesh) is locked - no swapping
-            if (mat.map && meshName === "Mesh_1") {
+            // Detect print layer by: has map texture AND is not glass/frame
+            // This works for any model without hardcoding mesh names
+            if (mat.map && finalIsPrint) {
               const layerId = `layer_${layerIdCounter++}`;
               const layerInfo = {
                 id: layerId,
@@ -567,7 +575,7 @@ export default function GlbTextureSwapTester() {
                 materialIndex: matIndex,
                 mapType: "map", // Only map is swappable
                 hasOriginal: true,
-                material: mat,
+              material: mat,
                 mesh: obj,
                 materialCategory: materialCategory,
               };
@@ -575,8 +583,8 @@ export default function GlbTextureSwapTester() {
               // Store original texture
               originalTextures.set(layerId, mat.map);
             }
+            });
           });
-        });
 
         setMaterialSummary({ totalMeshes, totalMaterials, byType });
         setTextureLayers(layers);
@@ -800,6 +808,14 @@ export default function GlbTextureSwapTester() {
     if (l.rim) l.rim.intensity = lighting.rim;
   }, [lighting]);
 
+  // Rotate the environment (HDRI) around Y (true HDRI rotation, not model rotation)
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    const yaw = THREE.MathUtils.degToRad(envRotation || 0);
+    // three.js supports environmentRotation for IBL sampling direction
+    sceneRef.current.environmentRotation = new THREE.Euler(0, yaw, 0);
+  }, [envRotation]);
+
   // Toggle environment map (WhiteWall-style: always on by default)
   // CRITICAL: Respect per-mesh envMapIntensity values set during model loading
   useEffect(() => {
@@ -816,7 +832,11 @@ export default function GlbTextureSwapTester() {
       mats.forEach((mat) => {
         if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
 
-        mat.envMap = showReflections ? envMapRef.current : null;
+        // IMPORTANT:
+        // Do NOT assign mat.envMap here.
+        // Assigning per-material envMap overrides scene.environmentRotation, so HDR rotation won't affect reflections.
+        // Keep envMap null and rely on scene.environment instead.
+        mat.envMap = null;
 
         // DO NOT override envMapIntensity - respect per-mesh values set during model loading
         // Mesh_1 (print) = 0.15, glass001 (glass) = 2.0, others = 1.0
@@ -827,7 +847,7 @@ export default function GlbTextureSwapTester() {
         } else if (meshName === "glass001" || meshName.toLowerCase() === "glass") {
           // Glass: high reflection (updated to 2.0 for WhiteWall look)
           mat.envMapIntensity = 2.5;
-      } else {
+    } else {
           // Default: medium reflection
           const isFrame = meshName.toLowerCase().includes("frame") || meshName.toLowerCase().includes("metal");
           mat.envMapIntensity = isFrame ? 1.0 : 1.0;
@@ -958,7 +978,22 @@ export default function GlbTextureSwapTester() {
   };
 
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
+    <div
+      style={{
+        width: "100vw",
+        height: "100vh",
+        position: "relative",
+        // WhiteWall-style studio background:
+        // soft vertical gradient + subtle radial falloff
+        background: `
+          radial-gradient(1200px 700px at 50% 40%,
+            #f3f3f3 0%,
+            #e3e0de 55%,
+            #d2cdca 100%),
+          linear-gradient(#cfc9c6 0%, #f6f6f6 65%, #ffffff 100%)
+        `,
+      }}
+    >
       <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
 
       {/* Simple Controls Panel */}
@@ -1095,11 +1130,11 @@ export default function GlbTextureSwapTester() {
                 {meshes.map((mesh) => (
                   <div
                     key={mesh.id}
-          style={{
+            style={{
                       marginBottom: 8,
             padding: 8,
                       background: "rgba(255,255,255,0.05)",
-            borderRadius: 6,
+              borderRadius: 6,
                       border: "1px solid rgba(255,255,255,0.1)",
                       display: "flex",
                       justifyContent: "space-between",
@@ -1109,7 +1144,7 @@ export default function GlbTextureSwapTester() {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 2 }}>
                         {mesh.name || "Unnamed Mesh"}
-                      </div>
+        </div>
                       <div style={{ fontSize: 10, opacity: 0.7 }}>
                         {mesh.visible ? "Visible" : "Hidden"}
                       </div>
@@ -1163,8 +1198,8 @@ export default function GlbTextureSwapTester() {
             <div style={{ marginTop: 10 }}>
               <div style={{ 
                 marginBottom: 12, 
-                padding: 8, 
-                background: "rgba(255,255,255,0.05)", 
+            padding: 8,
+            background: "rgba(255,255,255,0.05)",
                 borderRadius: 4,
                 fontSize: 11,
                 opacity: 0.8
@@ -1183,7 +1218,7 @@ export default function GlbTextureSwapTester() {
                     <span>{s.label}</span>
                     <span>{lighting[s.key].toFixed(2)}</span>
                   </div>
-                  <input
+          <input
                     type="range"
                     min={s.min}
                     max={s.max}
@@ -1205,31 +1240,63 @@ export default function GlbTextureSwapTester() {
                 </div>
               ))}
 
-          <button
+              {/* Environment / lighting rotation slider (horizontal HDRI alignment) */}
+              <div style={{ marginTop: 12 }}>
+                <div
+          style={{
+            display: "flex",
+                    justifyContent: "space-between",
+            alignItems: "center",
+                    marginBottom: 4,
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3 }}>
+                    Lighting Rotation (Y)
+                  </span>
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>
+                    {envRotation.toFixed(0)}°
+                  </span>
+                </div>
+          <input
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={1}
+                  value={envRotation}
+                  onChange={(e) => setEnvRotation(parseFloat(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+                <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
+                  Rotate the HDRI/environment horizontally (does not rotate the model)
+                </div>
+              </div>
+
+              <button
                 onClick={() => {
                   setLighting({
-                    exposure: 1.15,
+                    exposure: 1.30,
                     ambient: 0.05,
                     key: 0.45,
                     fill: 0.25,
                     rim: 0.35,
                   });
+                  setEnvRotation(0);
                 }}
-            style={{
+          style={{
                   width: "100%",
-              padding: 10,
-              border: 0,
-              borderRadius: 6,
+                  padding: 10,
+                  border: 0,
+            borderRadius: 6,
                   background: "#444",
-              color: "white",
-              cursor: "pointer",
-              fontWeight: 700,
+                  color: "white",
+                  cursor: "pointer",
+                  fontWeight: 700,
                   marginTop: 12,
-            }}
-          >
+                }}
+              >
                 Reset to WhiteWall Preset
-          </button>
-            </div>
+              </button>
+      </div>
           )}
         </div>
 
