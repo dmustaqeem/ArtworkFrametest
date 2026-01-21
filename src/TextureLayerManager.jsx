@@ -93,23 +93,24 @@ export default function TextureLayerManager({
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
 
       mats.forEach((mat, matIndex) => {
-        textureMapTypes.forEach((mapType) => {
-          if (mat[mapType]) {
-            const layerId = `layer_${layerIdCounter++}`;
-            const layerInfo = {
-              id: layerId,
-              meshName: obj.name || "Unnamed",
-              materialIndex: matIndex,
-              mapType: mapType,
-              hasOriginal: true,
-              material: mat,
-              mesh: obj
-            };
-            layers.push(layerInfo);
-            // Store original texture
-            originalTextures.set(layerId, mat[mapType]);
-          }
-        });
+        // CRITICAL FIX #2: Only detect 'map' layers for artwork editing
+        // PBR maps (normal, roughness, metalness) should NOT be swappable
+        const mapType = "map";
+        if (mat[mapType]) {
+          const layerId = `layer_${layerIdCounter++}`;
+          const layerInfo = {
+            id: layerId,
+            meshName: obj.name || "Unnamed",
+            materialIndex: matIndex,
+            mapType: mapType, // Only map is swappable
+            hasOriginal: true,
+            material: mat,
+            mesh: obj
+          };
+          layers.push(layerInfo);
+          // Store original texture
+          originalTextures.set(layerId, mat[mapType]);
+        }
       });
     });
 
@@ -156,6 +157,12 @@ export default function TextureLayerManager({
       return;
     }
 
+    // CRITICAL FIX #1: Only allow swapping 'map' type
+    if (layer.mapType !== "map") {
+      console.warn(`Skipping ${layer.mapType} — only 'map' is swappable for artwork`);
+      return;
+    }
+
     // Get fresh reference to mesh
     const mesh = layer.mesh;
     if (!mesh || !mesh.material) {
@@ -193,10 +200,11 @@ export default function TextureLayerManager({
     // Clone the texture to avoid sharing references
     const clonedTex = testTex.clone();
     clonedTex.colorSpace = THREE.SRGBColorSpace;
+    clonedTex.flipY = false; // IMPORTANT for glTF in many cases
     clonedTex.needsUpdate = true;
 
-    // Apply to the material
-    mat[layer.mapType] = clonedTex;
+    // Apply ONLY to map (color/diffuse texture)
+    mat.map = clonedTex;
     mat.needsUpdate = true;
 
     // Force renderer update if available

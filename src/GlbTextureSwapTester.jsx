@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 import USDZExporterButton from "./USDZExporter.jsx";
 import TextureLayerManager from "./TextureLayerManager.jsx";
 import TextureTransformModal from "./TextureTransformModal.jsx";
@@ -9,7 +10,7 @@ import TextureTransformModal from "./TextureTransformModal.jsx";
 // =========================
 // CONFIG
 // =========================
-const GLB_PATH = "/assets/models/Surfboard.glb";
+const GLB_PATH = "/assets/models/Skateboard.glb";
 const TEST_IMAGE_1_PATH = "/assets/frames/image1.jpg";
 const TEST_IMAGE_2_PATH = "/assets/frames/image2.jpeg";
 
@@ -27,41 +28,20 @@ export default function GlbTextureSwapTester() {
     key: null,
     fill: null,
     rim: null,
-    front: null,
-    point: null,
-    spot1: null,
-    spot2: null,
-    directional1: null,
-    directional2: null,
   });
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [materialSummary, setMaterialSummary] = useState(null); // { totalMeshes, totalMaterials, byType: { [type]: count } }
   const [lighting, setLighting] = useState({
-    exposure: 1.0,
-    ambient: 0.4,
-    key: 1.2,
-    fill: 0.6,
-    rim: 0.5,
-    front: 0.4,
-    point: 0.5,
-    spot1: 1.0,
-    spot2: 0.8,
-    directional1: 1.0,
-    directional2: 0.7,
-  });
-  const [lightPositions, setLightPositions] = useState({
-    spot1: { x: 4, y: 6, z: 4 },
-    spot1Target: { x: 0, y: 0, z: 0 },
-    spot2: { x: -4, y: 6, z: -4 },
-    spot2Target: { x: 0, y: 0, z: 0 },
-    directional1: { x: 6, y: 4, z: 6 },
-    directional2: { x: -6, y: 4, z: -6 },
+    exposure: 1.15, // WhiteWall-style: slightly increased for high-key look
+    ambient: 0.05, // WhiteWall-style: very low (reduced from 0.15 to avoid flat lighting)
+    key: 0.45, // WhiteWall-style: subtle key light (reduced from 0.6)
+    fill: 0.25, // WhiteWall-style: soft fill (reduced from 0.3)
+    rim: 0.35, // WhiteWall-style: edge highlight (reduced from 0.4)
   });
   const [showLightingControls, setShowLightingControls] = useState(false);
-  const [showLightPositionControls, setShowLightPositionControls] = useState(false);
-  const [showReflections, setShowReflections] = useState(false);
+  const [showReflections, setShowReflections] = useState(true); // Default to true for WhiteWall-style
   const envMapRef = useRef(null);
   const pmremGeneratorRef = useRef(null);
 
@@ -84,9 +64,9 @@ export default function GlbTextureSwapTester() {
   useEffect(() => {
     if (!mountRef.current) return;
 
-    // Scene setup
+    // Scene setup - WhiteWall-style high-key background
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x202020);
+    scene.background = new THREE.Color(0xeeeeee); // Light studio grey
     sceneRef.current = scene;
 
     // Camera
@@ -99,13 +79,21 @@ export default function GlbTextureSwapTester() {
     camera.position.set(0, 0.6, 3.5);
     cameraRef.current = camera;
 
-    // Renderer
+    // Renderer - WhiteWall-style settings
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // Critical for print-accurate colors
     renderer.toneMappingExposure = lighting.exposure;
+    
+    // Enable shadows for WhiteWall-style grounding
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    // Enable physically correct lights for better transmission/refraction
+    renderer.physicallyCorrectLights = true;
+    
     rendererRef.current = renderer;
     mountRef.current.appendChild(renderer.domElement);
 
@@ -133,97 +121,166 @@ export default function GlbTextureSwapTester() {
     pmremGenerator.compileEquirectangularShader();
     pmremGeneratorRef.current = pmremGenerator;
 
-    // Create a simple environment map for reflections
-    const envScene = new THREE.Scene();
-
-    // Add colored planes to create a simple environment
-    const planeGeometry = new THREE.PlaneGeometry(20, 20);
-
-    // Top (sky)
-    const topMaterial = new THREE.MeshStandardMaterial({ color: 0x87CEEB, side: THREE.DoubleSide });
-    const topPlane = new THREE.Mesh(planeGeometry, topMaterial);
-    topPlane.rotation.x = Math.PI / 2;
-    topPlane.position.y = 10;
-    envScene.add(topPlane);
-
-    // Bottom (ground)
-    const bottomMaterial = new THREE.MeshStandardMaterial({ color: 0x8B7355, side: THREE.DoubleSide });
-    const bottomPlane = new THREE.Mesh(planeGeometry, bottomMaterial);
-    bottomPlane.rotation.x = -Math.PI / 2;
-    bottomPlane.position.y = -10;
-    envScene.add(bottomPlane);
-
-    // Sides (walls)
-    const sideColors = [0x90EE90, 0xFFB6C1, 0xDDA0DD, 0xFFE4B5];
-    for (let i = 0; i < 4; i++) {
-      const sideMaterial = new THREE.MeshStandardMaterial({ color: sideColors[i], side: THREE.DoubleSide });
-      const sidePlane = new THREE.Mesh(planeGeometry, sideMaterial);
-      const angle = (i * Math.PI) / 2;
-      sidePlane.rotation.y = angle;
-      sidePlane.position.set(
-        Math.cos(angle) * 10,
-        0,
-        Math.sin(angle) * 10
+    // Create WhiteWall-style studio environment map
+    // This mimics a soft, bright studio HDRI for even illumination
+    const createStudioEnvironment = () => {
+      const envScene = new THREE.Scene();
+      
+      // WhiteWall-style softbox environment: bright panels that create distinct reflection streaks
+      // This produces recognizable highlights like a real photo studio
+      
+      // Big TOP softbox - strongest highlight (creates top strip light)
+      const top = new THREE.Mesh(
+        new THREE.PlaneGeometry(30, 18),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: 0xffffff,
+          emissiveIntensity: 3.0, // Much brighter for distinct highlights
+          side: THREE.DoubleSide
+        })
       );
-      envScene.add(sidePlane);
-    }
+      top.rotation.x = Math.PI / 2;
+      top.position.set(0, 10, 0);
+      envScene.add(top);
 
-    // Add some lights to the environment scene
-    const envLight = new THREE.AmbientLight(0xffffff, 1.0);
-    envScene.add(envLight);
-    const envDirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    envDirLight.position.set(5, 10, 5);
-    envScene.add(envDirLight);
+      // LEFT softbox - medium brightness
+      const left = new THREE.Mesh(
+        new THREE.PlaneGeometry(20, 20),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: 0xffffff,
+          emissiveIntensity: 1.6,
+          side: THREE.DoubleSide
+        })
+      );
+      left.rotation.y = Math.PI / 2;
+      left.position.set(-10, 2, 0);
+      envScene.add(left);
 
-    // Create environment map from the scene
-    const envMap = pmremGenerator.fromScene(envScene, 0.04).texture;
-    envMapRef.current = envMap;
+      // RIGHT softbox - medium brightness
+      const right = left.clone();
+      right.position.set(10, 2, 0);
+      right.rotation.y = -Math.PI / 2;
+      envScene.add(right);
 
-    // Lighting
+      // BACK softbox - low brightness (subtle fill)
+      const back = new THREE.Mesh(
+        new THREE.PlaneGeometry(20, 20),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: 0xffffff,
+          emissiveIntensity: 0.6,
+          side: THREE.DoubleSide
+        })
+      );
+      back.position.set(0, 2, -12);
+      envScene.add(back);
+
+      // Keep rest DARK so reflections have contrast (not flat lighting)
+      // Very low ambient so bright panels create distinct highlights
+      envScene.add(new THREE.AmbientLight(0xffffff, 0.05));
+
+      // Dark wrap for contrast control (WhiteWall reflections need darker areas too)
+      // This large dark sphere increases reflection contrast massively
+      const wrap = new THREE.Mesh(
+        new THREE.SphereGeometry(60, 32, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0x111111, // Very dark
+          metalness: 0,
+          roughness: 1,
+          side: THREE.BackSide // Inside faces only
+        })
+      );
+      envScene.add(wrap);
+
+      // Create environment map from the softbox scene
+      const envMap = pmremGenerator.fromScene(envScene, 0.04).texture;
+      return envMap;
+    };
+
+    // Set up environment map:
+    // Prefer a real high-key studio HDRI if present, otherwise fallback to our procedural studio environment.
+    const HDRI_PATH = "/assets/hdr/studio.hdr";
+    const setEnvironment = (newEnvMap) => {
+      if (!newEnvMap) return;
+      if (envMapRef.current && envMapRef.current !== newEnvMap) {
+        try {
+          envMapRef.current.dispose();
+        } catch {
+          // ignore
+        }
+      }
+      envMapRef.current = newEnvMap;
+      // Always set environment - toggling is handled by the [showReflections] effect
+      scene.environment = newEnvMap;
+    };
+
+    // Set fallback immediately (scene needs lighting right away)
+    const fallbackEnv = createStudioEnvironment();
+    setEnvironment(fallbackEnv);
+
+    // Try to load real HDRI (will replace fallback if successful)
+    new RGBELoader()
+      .setDataType(THREE.HalfFloatType)
+      .load(
+        HDRI_PATH,
+        (hdrTex) => {
+          // RGBELoader expects hdrTex to have .image property
+          // Check if texture is valid before processing
+          if (!hdrTex || !hdrTex.image) {
+            console.log("HDRI loaded but invalid, using fallback");
+            return; // Keep fallback environment
+          }
+          try {
+            const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
+            hdrTex.dispose();
+            setEnvironment(newEnvMap);
+          } catch (err) {
+            console.warn("Failed to process HDRI:", err);
+            // Keep fallback environment
+          }
+        },
+        undefined,
+        () => {
+          // Error callback: HDRI file not found
+          console.log("HDRI not found, using procedural studio environment");
+          // Fallback already set above
+        }
+      );
+
+    // WhiteWall-style lighting: Minimal, subtle lights
+    // 90% of lighting comes from environment map (HDRI), only subtle direct lights for edge definition
+    
+    // Very low ambient (WhiteWall avoids strong ambient)
     const ambientLight = new THREE.AmbientLight(0xffffff, lighting.ambient);
     scene.add(ambientLight);
 
+    // Subtle key light (main directional) - with shadows for grounding
     const keyLight = new THREE.DirectionalLight(0xffffff, lighting.key);
-    keyLight.position.set(5, 8, 5);
+    keyLight.position.set(6, 8, 6); // WhiteWall-style position
+    keyLight.castShadow = true; // Enable shadows for WhiteWall-style grounding
+    keyLight.shadow.mapSize.set(2048, 2048);
+    
+    // Set shadow camera bounds for proper shadow coverage
+    keyLight.shadow.camera.near = 0.1;
+    keyLight.shadow.camera.far = 50;
+    keyLight.shadow.camera.left = -10;
+    keyLight.shadow.camera.right = 10;
+    keyLight.shadow.camera.top = 10;
+    keyLight.shadow.camera.bottom = -10;
+    keyLight.shadow.bias = -0.0002; // Prevent shadow acne
+    
     scene.add(keyLight);
 
+    // Subtle fill light (softens shadows)
     const fillLight = new THREE.DirectionalLight(0xffffff, lighting.fill);
-    fillLight.position.set(-4, 3, -4);
+    fillLight.position.set(-6, 4, -6); // WhiteWall-style position
     scene.add(fillLight);
 
+    // Subtle rim light (edge readability)
     const rimLight = new THREE.DirectionalLight(0xffffff, lighting.rim);
-    rimLight.position.set(-2, 2, -6);
+    rimLight.position.set(-6, 6, -6);
     scene.add(rimLight);
-
-    const frontLight = new THREE.DirectionalLight(0xffffff, lighting.front);
-    frontLight.position.set(-3, 4, 6);
-    scene.add(frontLight);
-
-    const pointLight = new THREE.PointLight(0xffffff, lighting.point, 20);
-    pointLight.position.set(0, 5, 0);
-    scene.add(pointLight);
-
-    // Spot lights for reflections
-    const spotLight1 = new THREE.SpotLight(0xffffff, lighting.spot1, 30, Math.PI / 6, 0.3, 1);
-    spotLight1.position.set(lightPositions.spot1.x, lightPositions.spot1.y, lightPositions.spot1.z);
-    spotLight1.target.position.set(lightPositions.spot1Target.x, lightPositions.spot1Target.y, lightPositions.spot1Target.z);
-    scene.add(spotLight1);
-    scene.add(spotLight1.target);
-
-    const spotLight2 = new THREE.SpotLight(0xffffff, lighting.spot2, 30, Math.PI / 6, 0.3, 1);
-    spotLight2.position.set(lightPositions.spot2.x, lightPositions.spot2.y, lightPositions.spot2.z);
-    spotLight2.target.position.set(lightPositions.spot2Target.x, lightPositions.spot2Target.y, lightPositions.spot2Target.z);
-    scene.add(spotLight2);
-    scene.add(spotLight2.target);
-
-    // Additional directional lights for reflections
-    const directionalLight1 = new THREE.DirectionalLight(0xffffff, lighting.directional1);
-    directionalLight1.position.set(lightPositions.directional1.x, lightPositions.directional1.y, lightPositions.directional1.z);
-    scene.add(directionalLight1);
-
-    const directionalLight2 = new THREE.DirectionalLight(0xffffff, lighting.directional2);
-    directionalLight2.position.set(lightPositions.directional2.x, lightPositions.directional2.y, lightPositions.directional2.z);
-    scene.add(directionalLight2);
 
     // Store light references
     lightsRef.current = {
@@ -231,13 +288,19 @@ export default function GlbTextureSwapTester() {
       key: keyLight,
       fill: fillLight,
       rim: rimLight,
-      front: frontLight,
-      point: pointLight,
-      spot1: spotLight1,
-      spot2: spotLight2,
-      directional1: directionalLight1,
-      directional2: directionalLight2,
     };
+
+    // Shadow catcher (subtle grounding like WhiteWall)
+    // Position will be set after model is loaded and scaled
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 30),
+      new THREE.ShadowMaterial({ opacity: 0.08 }) // Very subtle shadow
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+    // Store ground reference for later positioning
+    const groundRef = ground;
 
     // Load GLB model
     const gltfLoader = new GLTFLoader();
@@ -266,45 +329,23 @@ export default function GlbTextureSwapTester() {
         const meshList = [];
         let meshIdCounter = 0;
 
-        // First, log ALL objects in the model to check for frame or other objects
-        console.log("=== All Objects in GLB Model (Checking for Frame) ===");
-        const allObjects = [];
-        model.traverse((obj) => {
-          allObjects.push({
-            type: obj.type,
-            name: obj.name || "Unnamed",
-            isMesh: obj.isMesh,
-            isGroup: obj.isGroup,
-            isObject3D: obj.isObject3D,
-            visible: obj.visible,
-            children: obj.children.length,
-            object: obj
-          });
-        });
-        console.log(`Total objects in model: ${allObjects.length}`);
-        allObjects.forEach((objInfo, idx) => {
-          console.log(`\n${idx + 1}. ${objInfo.name} (${objInfo.type})`);
-          console.log(`   Type: ${objInfo.type}`);
-          console.log(`   Is Mesh: ${objInfo.isMesh}`);
-          console.log(`   Is Group: ${objInfo.isGroup}`);
-          console.log(`   Visible: ${objInfo.visible}`);
-          console.log(`   Children: ${objInfo.children}`);
-          // Check if name contains "frame" (case insensitive)
-          if (objInfo.name && objInfo.name.toLowerCase().includes("frame")) {
-            console.log(`   ⚠️  FRAME DETECTED! This might be an embedded frame.`);
-          }
-        });
-        console.log("====================================================\n");
+        const meshMaterialDetails = [];
 
         model.traverse((obj) => {
           if (!obj.isMesh || !obj.material) return;
+          
+          // Enable shadows on all meshes for WhiteWall-style grounding
+          obj.castShadow = true;
+          obj.receiveShadow = false; // Model doesn't receive shadows, only ground does
+          
           totalMeshes += 1;
 
           // Track mesh visibility
           const meshId = `mesh_${meshIdCounter++}`;
+          const meshName = obj.name || `Mesh_${totalMeshes}`;
           const meshInfo = {
             id: meshId,
-            name: obj.name || `Mesh_${totalMeshes}`,
+            name: meshName,
             visible: obj.visible,
             mesh: obj
           };
@@ -316,25 +357,224 @@ export default function GlbTextureSwapTester() {
           mats.forEach((mat, matIndex) => {
             const t = mat?.type || "UnknownMaterial";
             byType[t] = (byType[t] || 0) + 1;
-
-            // Analyze texture layers for this material
-            textureMapTypes.forEach((mapType) => {
-              if (mat[mapType]) {
-                const layerId = `layer_${layerIdCounter++}`;
-                const layerInfo = {
-                  id: layerId,
-                  meshName: obj.name || `Mesh_${totalMeshes}`,
-                  materialIndex: matIndex,
-                  mapType: mapType,
-                  hasOriginal: true,
-              material: mat,
-                  mesh: obj
-                };
-                layers.push(layerInfo);
-                // Store original texture
-                originalTextures.set(layerId, mat[mapType]);
-              }
+            
+            const matName = mat.name || `Material_${matIndex}`;
+            
+            // Material properties
+            const props = {
+                transparent: mat.transparent,
+                opacity: mat.opacity,
+                roughness: mat.roughness,
+              metalness: mat.metalness,
+              clearcoat: mat.clearcoat,
+              clearcoatRoughness: mat.clearcoatRoughness,
+              envMapIntensity: mat.envMapIntensity,
+            };
+            
+            // Texture maps
+            const textureMaps = [];
+            if (mat.map) textureMaps.push("map");
+            if (mat.normalMap) textureMaps.push("normalMap");
+            if (mat.roughnessMap) textureMaps.push("roughnessMap");
+            if (mat.metalnessMap) textureMaps.push("metalnessMap");
+            if (mat.aoMap) textureMaps.push("aoMap");
+            if (mat.emissiveMap) textureMaps.push("emissiveMap");
+            if (mat.alphaMap) textureMaps.push("alphaMap");
+            if (mat.displacementMap) textureMaps.push("displacementMap");
+            if (mat.bumpMap) textureMaps.push("bumpMap");
+            
+            // ============================================================
+            // PROPER MATERIAL CLASSIFICATION
+            // ============================================================
+            const matNameLower = (matName || "").toLowerCase();
+            const meshNameLower = meshName.toLowerCase();
+            
+            // Classify material type based on mesh and material names
+            const isGlass = meshNameLower.includes("glass") || matNameLower.includes("glass");
+            const isPrint = matNameLower.includes("art") || matNameLower.includes("print") || 
+                           meshNameLower.includes("art") || meshNameLower.includes("back_art") ||
+                           matNameLower.includes("back_art");
+            const isAcrylicBody = matNameLower.includes("acrylic") || meshNameLower.includes("acrylic");
+            const isFrame = meshNameLower.includes("frame") || meshNameLower.includes("metal") || 
+                           matNameLower.includes("metal") || matNameLower.includes("frame");
+            
+            // CRITICAL FIX: Detect print candidates by checking for artwork map
+            // If a material has a color map and it's not glass/frame, it's likely the print surface
+            // In this GLB, Acrylic.001 is actually the print surface with artwork
+            const hasArtworkMap = !!mat.map;
+            const isPrintCandidate = hasArtworkMap && !isGlass && !isFrame;
+            
+            // Override: treat acrylic-with-map as PRINT for swapping (this model case)
+            const finalIsPrint = isPrint || isPrintCandidate;
+            
+            // Determine material category
+            let materialCategory = "UNKNOWN";
+            if (isFrame) materialCategory = "FRAME";
+            else if (isGlass) materialCategory = "GLASS";
+            else if (finalIsPrint) materialCategory = "PRINT";
+            else if (isAcrylicBody) materialCategory = "ACRYLIC";
+            
+            // Store for summary with proper classification
+            meshMaterialDetails.push({
+              meshName: meshName,
+              meshId: meshId,
+              materialIndex: matIndex,
+              materialName: matName,
+              materialType: t,
+              materialClass: mat.constructor.name,
+              materialCategory: materialCategory,
+              properties: props,
+              textureMaps: textureMaps,
+              isFrame: isFrame,
+              isGlass: isGlass,
+              isPrint: finalIsPrint, // Use finalIsPrint
+              isAcrylicBody: isAcrylicBody,
+              hasArtworkMap: hasArtworkMap,
+              isPrintCandidate: isPrintCandidate,
             });
+
+            // ============================================================
+            // APPLY CORRECT MATERIAL PROPERTIES BASED ON MESH NAME
+            // ============================================================
+            // WhiteWall-style: Specific mesh-based configuration
+            
+            // 1) Front Print (Mesh_1 → Acrylic.001) - Make it look like a print, NOT metal
+            if (meshName === "Mesh_1") {
+              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+                // CRITICAL: Remove PBR maps that make artwork look dark/plastic
+                // Only keep the artwork map (color texture)
+                mat.normalMap = null;
+                mat.roughnessMap = null;
+                mat.metalnessMap = null;
+                mat.aoMap = null;
+                
+                // Reset color to white (no tinting)
+                mat.color.set(0xffffff);
+                
+                // Print material properties - slightly punchy (not too matte)
+                mat.transparent = false;
+                mat.opacity = 1.0;
+                mat.metalness = 0.0; // NOT metal
+                mat.roughness = 0.65; // Less matte for WhiteWall-style (was 0.85)
+                mat.clearcoat = 0.0; // No clearcoat on print
+                
+                if (envMapRef.current) {
+                  mat.envMap = envMapRef.current;
+                  mat.envMapIntensity = 0.15; // Low reflection but not zero (was 0.25)
+                }
+                
+                // Make sure artwork map is treated as sRGB (color-accurate)
+                if (mat.map) {
+                  mat.map.colorSpace = THREE.SRGBColorSpace;
+                }
+                
+                mat.needsUpdate = true;
+              }
+              // Set render order: print draws first
+              obj.renderOrder = 1;
+            }
+            // 2) Glass Cover (glass001 → glass) - Realistic acrylic using transmission
+            else if (meshName === "glass001" || meshName.toLowerCase() === "glass") {
+              // Ensure we use Physical material for transmission
+              let acrylicMat = mat;
+
+              if (!mat.isMeshPhysicalMaterial) {
+                acrylicMat = new THREE.MeshPhysicalMaterial();
+                // Preserve existing maps if any
+                if (mat.map) acrylicMat.map = mat.map;
+                if (Array.isArray(obj.material)) {
+                  obj.material[matIndex] = acrylicMat;
+                } else {
+                  obj.material = acrylicMat;
+                }
+              }
+
+              // WhiteWall-style acrylic: transmission-based with tuned optical params
+              acrylicMat.color = new THREE.Color(0xffffff);
+              acrylicMat.transparent = true;
+              acrylicMat.transmission = 1.0; // Key: makes it transparent via refraction
+              acrylicMat.opacity = 1.0; // Keep 1.0 when using transmission
+              acrylicMat.ior = 1.49; // Acrylic index of refraction
+              acrylicMat.thickness = 0.06; // Increased for better refraction (try 0.04-0.08 based on scale)
+              acrylicMat.roughness = 0.04; // WhiteWall is pretty "clean" (was 0.08)
+              acrylicMat.metalness = 0.0;
+
+              // Polished acrylic edge highlight
+              acrylicMat.clearcoat = 1.0;
+              acrylicMat.clearcoatRoughness = 0.03; // Sharper highlights (was 0.08)
+
+              // Attenuation for realistic acrylic transmission
+              acrylicMat.attenuationColor = new THREE.Color(0xffffff);
+              acrylicMat.attenuationDistance = 1.0;
+
+              acrylicMat.depthWrite = false;
+              acrylicMat.depthTest = true; // Explicit depth test for transparent stacking
+              acrylicMat.side = THREE.DoubleSide; // Show both sides for thin plane
+
+              if (envMapRef.current) {
+                acrylicMat.envMap = envMapRef.current;
+                acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look (increased from 2.0)
+              }
+
+              acrylicMat.needsUpdate = true;
+
+              // Draw last (after print)
+              obj.renderOrder = 10;
+            }
+            // 3) Back Mesh (Mesh → Back_Art_M) - Leave it alone (do nothing)
+            else if (meshName === "Mesh" || meshName.toLowerCase().includes("back")) {
+              // Lock the back - do nothing, keep original material properties
+            }
+            // 4) Frame/Metal - Keep metallic properties
+            else if (isFrame) {
+              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+                mat.roughness = mat.roughness !== undefined ? Math.min(mat.roughness, 0.5) : 0.4;
+                mat.metalness = mat.metalness !== undefined ? Math.max(mat.metalness, 0.6) : 0.7;
+                if (envMapRef.current && !mat.envMap) {
+                  mat.envMap = envMapRef.current;
+                  mat.envMapIntensity = 1.0;
+                  mat.needsUpdate = true;
+                }
+              }
+            }
+            // 5) Other meshes - Default to print-like (matte, opaque)
+            else {
+              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+                mat.metalness = 0.0;
+                mat.roughness = 0.85;
+                mat.transparent = false;
+                mat.opacity = 1.0;
+                if (envMapRef.current && !mat.envMap) {
+                  mat.envMap = envMapRef.current;
+                  mat.envMapIntensity = 0.6;
+                  mat.needsUpdate = true;
+                }
+              }
+            }
+            
+            // ============================================================
+            // TEXTURE LAYER DETECTION - ONLY MAP FOR ARTWORK
+            // ============================================================
+            // CRITICAL: Only detect 'map' layers for artwork swapping
+            // PBR maps (normal, roughness, metalness) should NOT be swappable
+            // Only front print (Mesh_1) should have swappable artwork layers
+            // Back mesh (Mesh) is locked - no swapping
+            if (mat.map && meshName === "Mesh_1") {
+              const layerId = `layer_${layerIdCounter++}`;
+              const layerInfo = {
+                id: layerId,
+                meshName: meshName,
+                materialIndex: matIndex,
+                mapType: "map", // Only map is swappable
+                hasOriginal: true,
+                material: mat,
+                mesh: obj,
+                materialCategory: materialCategory,
+              };
+              layers.push(layerInfo);
+              // Store original texture
+              originalTextures.set(layerId, mat.map);
+            }
           });
         });
 
@@ -343,40 +583,143 @@ export default function GlbTextureSwapTester() {
         originalTexturesRef.current = originalTextures;
         setMeshes(meshList);
 
-        // Console log all texture layers grouped by mesh
-        console.log("=== All Texture Layers (Available for Texture Application) ===");
-        console.log(`Total texture layers: ${layers.length}`);
+        // ============================================================
+        // COMPREHENSIVE MODEL ANALYSIS FOR WHITEWALL SETUP
+        // ============================================================
+        console.log("\n" + "=".repeat(80));
+        console.log("🔍 COMPREHENSIVE GLB MODEL ANALYSIS FOR WHITEWALL SETUP");
+        console.log("=".repeat(80));
 
-        // Group layers by mesh name
-        const layersByMesh = {};
-        layers.forEach((layer) => {
-          const meshName = layer.meshName || "Unnamed";
-          if (!layersByMesh[meshName]) {
-            layersByMesh[meshName] = [];
-          }
-          layersByMesh[meshName].push(layer);
+        // 1) Mesh + Material Naming with Roles
+        console.log("\n📋 1) MESH + MATERIAL NAMING (with roles)");
+        console.log("-".repeat(80));
+        meshMaterialDetails.forEach((detail, idx) => {
+          console.log(`\n${idx + 1}. Mesh: "${detail.meshName}"`);
+          console.log(`   Material: "${detail.materialName}"`);
+          console.log(`   Type: ${detail.materialType} (${detail.materialClass})`);
+          console.log(`   Category: ${detail.materialCategory}`);
+          console.log(`   Has map: ${detail.hasArtworkMap ? "YES" : "NO"}`);
+          const pbrMaps = detail.textureMaps.filter(m => m !== "map");
+          console.log(`   PBR maps: ${pbrMaps.length > 0 ? pbrMaps.join(", ") : "none"}`);
+          console.log(`   Properties: transparent=${detail.properties.transparent}, opacity=${detail.properties.opacity}, roughness=${detail.properties.roughness}, metalness=${detail.properties.metalness}`);
         });
 
-        // Print grouped by mesh
-        Object.entries(layersByMesh).forEach(([meshName, meshLayers]) => {
-          console.log(`\n📦 Mesh: ${meshName} (${meshLayers.length} texture layer(s))`);
-          meshLayers.forEach((layer, idx) => {
-            console.log(`  ${idx + 1}. Layer ID: ${layer.id}`);
-            console.log(`     Map Type: ${layer.mapType}`);
-            console.log(`     Material Index: ${layer.materialIndex}`);
-            console.log(`     Has Original Texture: ${layer.hasOriginal}`);
+        // 2) Which mesh is the "print surface"
+        console.log("\n📋 2) PRINT SURFACE IDENTIFICATION");
+        console.log("-".repeat(80));
+        const printMeshes = meshMaterialDetails.filter(d => d.isPrint);
+        if (printMeshes.length > 0) {
+          console.log("✅ PRINT SURFACE MESHES (artwork UVs - swappable map):");
+          printMeshes.forEach(d => {
+            console.log(`   - "${d.meshName}" → "${d.materialName}" (has map: ${d.hasArtworkMap})`);
+          });
+        } else {
+          console.log("⚠️  NO PRINT SURFACE DETECTED (no meshes with swappable map)");
+        }
+
+        // 3) Face orientation / sidedness
+        console.log("\n📋 3) FACE ORIENTATION / SIDEDNESS");
+        console.log("-".repeat(80));
+        model.traverse((obj) => {
+          if (!obj.isMesh || !obj.material) return;
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((mat, idx) => {
+            const side = mat.side === THREE.DoubleSide ? "DoubleSide" : 
+                        mat.side === THREE.BackSide ? "BackSide" : "FrontSide";
+            console.log(`   "${obj.name || 'Unnamed'}" → Material ${idx}: side=${side}`);
+            
+            // Check geometry for thickness/depth
+            if (obj.geometry) {
+              const pos = obj.geometry.attributes.position;
+              if (pos) {
+                const count = pos.count;
+                const indices = obj.geometry.index;
+                const triangleCount = indices ? indices.count / 3 : count / 3;
+                
+                // Estimate if it's a plane or solid by checking bounding box
+                const geomBox = new THREE.Box3().setFromObject(obj);
+                const geomSize = geomBox.getSize(new THREE.Vector3());
+                const minDim = Math.min(geomSize.x, geomSize.y, geomSize.z);
+                const maxDim = Math.max(geomSize.x, geomSize.y, geomSize.z);
+                const thicknessRatio = minDim / maxDim;
+                
+                const isThin = thicknessRatio < 0.1;
+                console.log(`      Geometry: ${count} vertices, ${triangleCount.toFixed(0)} triangles, ${obj.geometry.type}`);
+                console.log(`      Bounding box: x=${geomSize.x.toFixed(3)}, y=${geomSize.y.toFixed(3)}, z=${geomSize.z.toFixed(3)}`);
+                console.log(`      ${isThin ? "⚠️  THIN PLANE (single-sided likely)" : "✓ SOLID (closed mesh)"} (thickness ratio: ${thicknessRatio.toFixed(3)})`);
+              }
+            }
           });
         });
 
-        console.log("\n=== Summary ===");
-        console.log(`Total Meshes: ${meshList.length}`);
-        console.log(`Total Texture Layers: ${layers.length}`);
-        console.log("===========================");
-
-        // Center and scale model
+        // 4) Scale / Thickness Context
+        console.log("\n📋 4) SCALE / THICKNESS CONTEXT");
+        console.log("-".repeat(80));
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
+        console.log(`   Original bounding box size: x=${size.x.toFixed(3)}, y=${size.y.toFixed(3)}, z=${size.z.toFixed(3)}`);
+        console.log(`   Center: x=${center.x.toFixed(3)}, y=${center.y.toFixed(3)}, z=${center.z.toFixed(3)}`);
+        const originalMaxDim = Math.max(size.x, size.y, size.z);
+        console.log(`   Max dimension: ${originalMaxDim.toFixed(3)}`);
+        console.log(`   Scale factor will be: ${(2.5 / originalMaxDim).toFixed(3)}`);
+        console.log(`   Estimated final size: ~${(originalMaxDim * (2.5 / originalMaxDim)).toFixed(3)} units`);
+
+        // 5) UV Layout Expectations
+        console.log("\n📋 5) UV LAYOUT EXPECTATIONS FOR SWAPPING");
+        console.log("-".repeat(80));
+        console.log(`   Total swappable texture layers: ${layers.length}`);
+        layers.forEach((layer, idx) => {
+          console.log(`   ${idx + 1}. Layer: "${layer.meshName}" → "${layer.mapType}"`);
+          console.log(`      Material index: ${layer.materialIndex}`);
+          console.log(`      Category: ${layer.materialCategory}`);
+        });
+        if (layers.length === 0) {
+          console.log("   ⚠️  NO SWAPPABLE LAYERS FOUND (check if print meshes have 'map' texture)");
+        }
+
+        // 6) Current Renderer + Environment Setup
+        console.log("\n📋 6) CURRENT RENDERER + ENVIRONMENT SETUP");
+        console.log("-".repeat(80));
+        console.log(`   Three.js version: ${THREE.REVISION}`);
+        console.log(`   Tone mapping: ${renderer.toneMapping === THREE.ACESFilmicToneMapping ? "ACESFilmicToneMapping ✓" : "Other"}`);
+        console.log(`   Tone mapping exposure: ${renderer.toneMappingExposure}`);
+        console.log(`   Output color space: ${renderer.outputColorSpace === THREE.SRGBColorSpace ? "SRGBColorSpace ✓" : "Other"}`);
+        console.log(`   Environment map: ${scene.environment ? "SET ✓" : "NOT SET"}`);
+        console.log(`   HDRI path expected: "/assets/hdr/studio.hdr"`);
+        console.log(`   HDRI format: .hdr (RGBE/Radiance)`);
+
+        // 7) Material Properties Summary
+        console.log("\n📋 7) CURRENT MATERIAL PROPERTIES (for WhiteWall look)");
+        console.log("-".repeat(80));
+        meshMaterialDetails.forEach((detail) => {
+          console.log(`\n   "${detail.meshName}" → "${detail.materialName}" (${detail.materialCategory}):`);
+          console.log(`      transparent: ${detail.properties.transparent ?? "N/A"}`);
+          console.log(`      opacity: ${detail.properties.opacity ?? "N/A"}`);
+          console.log(`      roughness: ${detail.properties.roughness ?? "N/A"}`);
+          console.log(`      metalness: ${detail.properties.metalness ?? "N/A"}`);
+          console.log(`      clearcoat: ${detail.properties.clearcoat ?? "N/A"}`);
+          console.log(`      clearcoatRoughness: ${detail.properties.clearcoatRoughness ?? "N/A"}`);
+          console.log(`      envMapIntensity: ${detail.properties.envMapIntensity ?? "N/A"}`);
+        });
+
+        // Toggle Test Instructions
+        console.log("\n📋 TOGGLE TESTS (manual verification needed)");
+        console.log("-".repeat(80));
+        console.log("   Use the Mesh Visibility controls to test:");
+        meshList.forEach((mesh, idx) => {
+          console.log(`   ${idx + 1}. Hide "${mesh.name}" → Check what changes visually`);
+        });
+        console.log("\n   Expected results:");
+        console.log("   - Hide PRINT mesh → artwork should disappear");
+        console.log("   - Hide GLASS mesh → artwork should become clearer (less foggy)");
+        console.log("   - Hide ACRYLIC mesh → check if it affects reflections/transparency");
+
+        console.log("\n" + "=".repeat(80));
+        console.log("✅ Analysis complete - use this info to configure WhiteWall material settings");
+        console.log("=".repeat(80) + "\n");
+
+        // Center and scale model
         
         model.position.sub(center);
         
@@ -389,6 +732,10 @@ export default function GlbTextureSwapTester() {
         
         const finalBox = new THREE.Box3().setFromObject(model);
         modelBoundingBoxRef.current = finalBox;
+
+        // Auto-position ground plane at bottom of model bounding box
+        const minY = finalBox.min.y;
+        groundRef.position.y = minY - 0.002; // Tiny offset below model
 
         scene.add(model);
         setLoading(false);
@@ -439,7 +786,7 @@ export default function GlbTextureSwapTester() {
     };
   }, []);
 
-  // Live lighting updates
+  // Live lighting updates - WhiteWall-style
   useEffect(() => {
     if (!rendererRef.current || !lightsRef.current) return;
 
@@ -451,69 +798,44 @@ export default function GlbTextureSwapTester() {
     if (l.key) l.key.intensity = lighting.key;
     if (l.fill) l.fill.intensity = lighting.fill;
     if (l.rim) l.rim.intensity = lighting.rim;
-    if (l.front) l.front.intensity = lighting.front;
-    if (l.point) l.point.intensity = lighting.point;
+  }, [lighting]);
 
-    if (l.spot1) {
-      l.spot1.intensity = lighting.spot1;
-      l.spot1.position.set(lightPositions.spot1.x, lightPositions.spot1.y, lightPositions.spot1.z);
-      l.spot1.target.position.set(lightPositions.spot1Target.x, lightPositions.spot1Target.y, lightPositions.spot1Target.z);
-      l.spot1.target.updateMatrixWorld();
-    }
-    if (l.spot2) {
-      l.spot2.intensity = lighting.spot2;
-      l.spot2.position.set(lightPositions.spot2.x, lightPositions.spot2.y, lightPositions.spot2.z);
-      l.spot2.target.position.set(lightPositions.spot2Target.x, lightPositions.spot2Target.y, lightPositions.spot2Target.z);
-      l.spot2.target.updateMatrixWorld();
-    }
-    if (l.directional1) {
-      l.directional1.intensity = lighting.directional1;
-      l.directional1.position.set(lightPositions.directional1.x, lightPositions.directional1.y, lightPositions.directional1.z);
-    }
-    if (l.directional2) {
-      l.directional2.intensity = lighting.directional2;
-      l.directional2.position.set(lightPositions.directional2.x, lightPositions.directional2.y, lightPositions.directional2.z);
-    }
-  }, [lighting, lightPositions]);
-
-  // Toggle reflections on/off
+  // Toggle environment map (WhiteWall-style: always on by default)
+  // CRITICAL: Respect per-mesh envMapIntensity values set during model loading
   useEffect(() => {
     if (!sceneRef.current || !envMapRef.current) return;
 
-    if (showReflections) {
-      sceneRef.current.environment = envMapRef.current;
-      // Also apply to model materials
-      if (modelRef.current) {
-        modelRef.current.traverse((obj) => {
-          if (obj.isMesh && obj.material) {
-            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-            mats.forEach((mat) => {
-              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-                mat.envMap = envMapRef.current;
-                mat.envMapIntensity = 1.0;
-                mat.needsUpdate = true;
-              }
-            });
-          }
-        });
-      }
+    sceneRef.current.environment = showReflections ? envMapRef.current : null;
+
+    if (!modelRef.current) return;
+
+    modelRef.current.traverse((obj) => {
+      if (!obj.isMesh || !obj.material) return;
+
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
+
+        mat.envMap = showReflections ? envMapRef.current : null;
+
+        // DO NOT override envMapIntensity - respect per-mesh values set during model loading
+        // Mesh_1 (print) = 0.15, glass001 (glass) = 2.0, others = 1.0
+        const meshName = obj.name || "";
+        if (meshName === "Mesh_1") {
+          // Print: low reflection (updated to 0.15)
+          mat.envMapIntensity = 0.15;
+        } else if (meshName === "glass001" || meshName.toLowerCase() === "glass") {
+          // Glass: high reflection (updated to 2.0 for WhiteWall look)
+          mat.envMapIntensity = 2.5;
       } else {
-      sceneRef.current.environment = null;
-      // Remove from model materials
-      if (modelRef.current) {
-        modelRef.current.traverse((obj) => {
-          if (obj.isMesh && obj.material) {
-            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-            mats.forEach((mat) => {
-              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-                mat.envMap = null;
+          // Default: medium reflection
+          const isFrame = meshName.toLowerCase().includes("frame") || meshName.toLowerCase().includes("metal");
+          mat.envMapIntensity = isFrame ? 1.0 : 1.0;
+        }
+
       mat.needsUpdate = true;
-    }
-            });
-          }
-        });
-      }
-    }
+      });
+    });
   }, [showReflections]);
 
   // Apply test texture to a specific layer
@@ -521,6 +843,12 @@ export default function GlbTextureSwapTester() {
     const layer = textureLayers.find(l => l.id === layerId);
     if (!layer || !layer.material || !layer.mesh) {
       console.warn(`Layer ${layerId} not found or invalid`);
+      return;
+    }
+
+    // CRITICAL FIX #1: Only allow swapping 'map' type
+    if (layer.mapType !== "map") {
+      console.warn(`Skipping ${layer.mapType} — only 'map' is swappable for artwork`);
       return;
     }
 
@@ -562,10 +890,11 @@ export default function GlbTextureSwapTester() {
     // Clone the texture to avoid sharing references
     const clonedTex = testTex.clone();
     clonedTex.colorSpace = THREE.SRGBColorSpace;
+    clonedTex.flipY = false; // IMPORTANT for glTF in many cases
     clonedTex.needsUpdate = true;
 
-    // Apply to the material
-    mat[layer.mapType] = clonedTex;
+    // Apply ONLY to map (color/diffuse texture)
+    mat.map = clonedTex;
       mat.needsUpdate = true;
     
     // Force renderer update
@@ -600,7 +929,7 @@ export default function GlbTextureSwapTester() {
     const originalTex = originalTexturesRef.current.get(layerId);
     if (originalTex) {
       mat[layer.mapType] = originalTex;
-      mat.needsUpdate = true;
+        mat.needsUpdate = true;
       
       // Force renderer update
       if (rendererRef.current) {
@@ -657,7 +986,7 @@ export default function GlbTextureSwapTester() {
 
         <button
           onClick={() => setShowReflections(!showReflections)}
-          style={{
+            style={{
             width: "100%",
             padding: 14,
             border: 0,
@@ -665,8 +994,8 @@ export default function GlbTextureSwapTester() {
             background: showReflections ? "#4CAF50" : "#666",
             color: "white",
             cursor: "pointer",
-            fontWeight: 700,
-            fontSize: 14,
+                fontWeight: 700,
+                fontSize: 14,
               marginTop: 12,
             transition: "background-color 0.2s",
             boxShadow: showReflections ? "0 0 10px rgba(76, 175, 80, 0.5)" : "none",
@@ -683,17 +1012,17 @@ export default function GlbTextureSwapTester() {
 
         {/* Texture Transform Button */}
         {!loading && textureLayers.length > 0 && (
-          <button
+        <button
             onClick={() => setShowTextureTransformModal(true)}
-              style={{
-              width: "100%",
+          style={{
+            width: "100%",
               padding: 14,
-              border: 0,
-              borderRadius: 6,
-              background: "#2196F3",
-              color: "white",
-              cursor: "pointer",
-                fontWeight: 700,
+            border: 0,
+            borderRadius: 6,
+            background: "#2196F3",
+            color: "white",
+            cursor: "pointer",
+            fontWeight: 700,
                 fontSize: 14,
               marginTop: 12,
               transition: "background-color 0.2s",
@@ -706,7 +1035,7 @@ export default function GlbTextureSwapTester() {
             }}
           >
             Transform Texture (All Layers)
-          </button>
+        </button>
         )}
 
         {/* USDZ Export Button */}
@@ -741,25 +1070,25 @@ export default function GlbTextureSwapTester() {
         {/* Mesh Visibility Controls - Collapsible */}
         {!loading && meshes.length > 0 && (
           <div style={{ marginTop: 14, fontFamily: "monospace", fontSize: 12 }}>
-            <button
+          <button
               onClick={() => setShowMeshControls(!showMeshControls)}
-        style={{
+            style={{
                 width: "100%",
-                padding: 10,
-                border: 0,
-                borderRadius: 6,
+              padding: 10,
+              border: 0,
+              borderRadius: 6,
                 background: showMeshControls ? "#555" : "#444",
-          color: "white",
-                cursor: "pointer",
-                fontWeight: 700,
+              color: "white",
+              cursor: "pointer",
+              fontWeight: 700,
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-              }}
-            >
+            }}
+          >
               <span>Mesh Visibility ({meshes.length})</span>
               <span>{showMeshControls ? "−" : "+"}</span>
-            </button>
+          </button>
 
             {showMeshControls && (
               <div style={{ marginTop: 10, maxHeight: "400px", overflowY: "auto", paddingRight: 4 }}>
@@ -785,23 +1114,23 @@ export default function GlbTextureSwapTester() {
                         {mesh.visible ? "Visible" : "Hidden"}
                       </div>
                     </div>
-        <button
+          <button
                       onClick={() => toggleMeshVisibility(mesh.id)}
-          style={{
+            style={{
                         padding: "6px 12px",
-            border: 0,
+              border: 0,
                         borderRadius: 4,
                         background: mesh.visible ? "#4CAF50" : "#666",
-            color: "white",
-            cursor: "pointer",
+              color: "white",
+              cursor: "pointer",
                         fontSize: 10,
                         fontWeight: 600,
                         minWidth: 60,
-                      }}
-                    >
+            }}
+          >
                       {mesh.visible ? "ON" : "OFF"}
-        </button>
-                  </div>
+          </button>
+        </div>
                 ))}
               </div>
             )}
@@ -832,20 +1161,24 @@ export default function GlbTextureSwapTester() {
 
           {showLightingControls && (
             <div style={{ marginTop: 10 }}>
+              <div style={{ 
+                marginBottom: 12, 
+                padding: 8, 
+                background: "rgba(255,255,255,0.05)", 
+                borderRadius: 4,
+                fontSize: 11,
+                opacity: 0.8
+              }}>
+                WhiteWall-style: Studio HDRI environment + minimal lights
+              </div>
               {[
-                { key: "exposure", label: "Exposure", min: 0.2, max: 2.5, step: 0.01 },
-                { key: "ambient", label: "Ambient", min: 0, max: 2, step: 0.01 },
-                { key: "key", label: "Key", min: 0, max: 3, step: 0.01 },
-                { key: "fill", label: "Fill", min: 0, max: 3, step: 0.01 },
-                { key: "rim", label: "Rim", min: 0, max: 3, step: 0.01 },
-                { key: "front", label: "Front", min: 0, max: 3, step: 0.01 },
-                { key: "point", label: "Point", min: 0, max: 3, step: 0.01 },
-                { key: "spot1", label: "Spot 1", min: 0, max: 3, step: 0.01 },
-                { key: "spot2", label: "Spot 2", min: 0, max: 3, step: 0.01 },
-                { key: "directional1", label: "Directional 1", min: 0, max: 3, step: 0.01 },
-                { key: "directional2", label: "Directional 2", min: 0, max: 3, step: 0.01 },
+                { key: "exposure", label: "Exposure", min: 0.5, max: 2.0, step: 0.01, desc: "ACES Filmic tone mapping" },
+                { key: "ambient", label: "Ambient", min: 0, max: 0.5, step: 0.01, desc: "Very low (0.1-0.2 recommended)" },
+                { key: "key", label: "Key Light", min: 0, max: 1.5, step: 0.01, desc: "Main directional light" },
+                { key: "fill", label: "Fill Light", min: 0, max: 1.0, step: 0.01, desc: "Softens shadows" },
+                { key: "rim", label: "Rim Light", min: 0, max: 1.0, step: 0.01, desc: "Edge highlight (keep subtle)" },
               ].map((s) => (
-                <div key={s.key} style={{ marginBottom: 10 }}>
+                <div key={s.key} style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9 }}>
                     <span>{s.label}</span>
                     <span>{lighting[s.key].toFixed(2)}</span>
@@ -864,23 +1197,22 @@ export default function GlbTextureSwapTester() {
                     }
                     style={{ width: "100%" }}
                   />
+                  {s.desc && (
+                    <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
+                      {s.desc}
+                    </div>
+                  )}
                 </div>
               ))}
 
           <button
                 onClick={() => {
                   setLighting({
-                    exposure: 1.0,
-                    ambient: 0.4,
-                    key: 1.2,
-                    fill: 0.6,
-                    rim: 0.5,
-                    front: 0.4,
-                    point: 0.5,
-                    spot1: 1.0,
-                    spot2: 0.8,
-                    directional1: 1.0,
-                    directional2: 0.7,
+                    exposure: 1.15,
+                    ambient: 0.05,
+                    key: 0.45,
+                    fill: 0.25,
+                    rim: 0.35,
                   });
                 }}
             style={{
@@ -895,218 +1227,12 @@ export default function GlbTextureSwapTester() {
                   marginTop: 12,
             }}
           >
-                Reset Intensity
+                Reset to WhiteWall Preset
           </button>
             </div>
           )}
         </div>
 
-        {/* Light Position Controls - Separate Collapsible Block */}
-        <div style={{ marginTop: 14, fontFamily: "monospace", fontSize: 12 }}>
-          <button
-            onClick={() => setShowLightPositionControls(!showLightPositionControls)}
-            style={{
-              width: "100%",
-              padding: 10,
-              border: 0,
-              borderRadius: 6,
-              background: showLightPositionControls ? "#555" : "#444",
-              color: "white",
-              cursor: "pointer",
-              fontWeight: 700,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span>Light Position Controls</span>
-            <span>{showLightPositionControls ? "−" : "+"}</span>
-          </button>
-
-          {showLightPositionControls && (
-            <div style={{ marginTop: 10, maxHeight: "400px", overflowY: "auto", paddingRight: 4 }}>
-              {/* Spot Light 1 Position Controls */}
-              <div style={{ marginTop: 8, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Spot Light 1 Position</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={axis} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.spot1[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-10}
-                      max={10}
-                      step={0.1}
-                      value={lightPositions.spot1[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          spot1: { ...prev.spot1, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-                <div style={{ fontWeight: 700, marginTop: 12, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Spot Light 1 Target</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={`target-${axis}`} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.spot1Target[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-5}
-                      max={5}
-                      step={0.1}
-                      value={lightPositions.spot1Target[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          spot1Target: { ...prev.spot1Target, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {/* Spot Light 2 Position Controls */}
-              <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Spot Light 2 Position</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={axis} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.spot2[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-10}
-                      max={10}
-                      step={0.1}
-                      value={lightPositions.spot2[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          spot2: { ...prev.spot2, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-                <div style={{ fontWeight: 700, marginTop: 12, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Spot Light 2 Target</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={`target-${axis}`} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.spot2Target[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-5}
-                      max={5}
-                      step={0.1}
-                      value={lightPositions.spot2Target[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          spot2Target: { ...prev.spot2Target, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {/* Directional Light 1 Position Controls */}
-              <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Directional Light 1 Position</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={axis} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.directional1[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-10}
-                      max={10}
-                      step={0.1}
-                      value={lightPositions.directional1[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          directional1: { ...prev.directional1, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {/* Directional Light 2 Position Controls */}
-              <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 11, opacity: 0.9 }}>Directional Light 2 Position</div>
-                {["x", "y", "z"].map((axis) => (
-                  <div key={axis} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9, fontSize: 11 }}>
-                      <span>{axis.toUpperCase()}</span>
-                      <span>{lightPositions.directional2[axis].toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={-10}
-                      max={10}
-                      step={0.1}
-                      value={lightPositions.directional2[axis]}
-                      onChange={(e) =>
-                        setLightPositions((prev) => ({
-                          ...prev,
-                          directional2: { ...prev.directional2, [axis]: parseFloat(e.target.value) },
-                        }))
-                      }
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                ))}
-              </div>
-
-          <button
-                onClick={() => {
-                  setLightPositions({
-                    spot1: { x: 4, y: 6, z: 4 },
-                    spot1Target: { x: 0, y: 0, z: 0 },
-                    spot2: { x: -4, y: 6, z: -4 },
-                    spot2Target: { x: 0, y: 0, z: 0 },
-                    directional1: { x: 6, y: 4, z: 6 },
-                    directional2: { x: -6, y: 4, z: -6 },
-                  });
-                }}
-            style={{
-                  width: "100%",
-              padding: 10,
-              border: 0,
-              borderRadius: 6,
-                  background: "#444",
-              color: "white",
-              cursor: "pointer",
-              fontWeight: 700,
-                  marginTop: 12,
-            }}
-          >
-                Reset Positions
-          </button>
-            </div>
-          )}
-        </div>
         </div>
 
       {/* Bottom info box: material types summary */}
