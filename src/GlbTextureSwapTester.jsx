@@ -95,9 +95,8 @@ export default function GlbTextureSwapTester() {
     // Transparent clear color so CSS gradient is visible
     renderer.setClearColor(0x000000, 0);
     
-    // Enable shadows for WhiteWall-style grounding
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Shadows disabled (not needed)
+    renderer.shadowMap.enabled = false;
     
     // Enable physically correct lights for better transmission/refraction
     renderer.physicallyCorrectLights = true;
@@ -105,22 +104,46 @@ export default function GlbTextureSwapTester() {
     rendererRef.current = renderer;
     mountRef.current.appendChild(renderer.domElement);
 
-    // Controls
+    // Controls - Enable full rotation
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.05; // Smooth rotation
+    controls.enableRotate = true; // Enable rotation
+    controls.enablePan = true; // Enable panning
+    controls.enableZoom = true; // Enable zoom
+    controls.target.set(0, 0, 0); // Initial target (will be updated when model loads)
     controlsRef.current = controls;
 
     // Texture loader
     const textureLoader = new THREE.TextureLoader();
     textureLoaderRef.current = textureLoader;
 
-    // Load test textures
-    textureLoader.load(TEST_IMAGE_1_PATH, (tex) => {
+    // Function to make print textures crisp and high-quality
+    const makePrintTextureCrisp = (tex) => {
+      if (!tex) return;
       tex.colorSpace = THREE.SRGBColorSpace;
+      tex.flipY = false;
+
+      // Sharp sampling for print-like crispness
+      tex.generateMipmaps = true; // Keep ON for stability
+      tex.minFilter = THREE.LinearMipmapLinearFilter; // Good default for minification
+      tex.magFilter = THREE.LinearFilter; // Crisp when viewed up close (try NearestFilter if too harsh)
+      
+      // Anisotropy is the biggest win for "print sharpness" when the surface is tilted
+      tex.anisotropy = rendererRef.current
+        ? rendererRef.current.capabilities.getMaxAnisotropy()
+        : 16; // High anisotropy for maximum sharpness
+
+      tex.needsUpdate = true;
+    };
+
+    // Load test textures with crisp settings
+    textureLoader.load(TEST_IMAGE_1_PATH, (tex) => {
+      makePrintTextureCrisp(tex);
       testTexture1Ref.current = tex;
     });
     textureLoader.load(TEST_IMAGE_2_PATH, (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
+      makePrintTextureCrisp(tex);
       testTexture2Ref.current = tex;
     });
 
@@ -263,20 +286,10 @@ export default function GlbTextureSwapTester() {
     const ambientLight = new THREE.AmbientLight(0xffffff, lighting.ambient);
     scene.add(ambientLight);
 
-    // Subtle key light (main directional) - with shadows for grounding
+    // Subtle key light (main directional)
     const keyLight = new THREE.DirectionalLight(0xffffff, lighting.key);
     keyLight.position.set(6, 8, 6); // WhiteWall-style position
-    keyLight.castShadow = true; // Enable shadows for WhiteWall-style grounding
-    keyLight.shadow.mapSize.set(2048, 2048);
-    
-    // Set shadow camera bounds for proper shadow coverage
-    keyLight.shadow.camera.near = 0.1;
-    keyLight.shadow.camera.far = 50;
-    keyLight.shadow.camera.left = -10;
-    keyLight.shadow.camera.right = 10;
-    keyLight.shadow.camera.top = 10;
-    keyLight.shadow.camera.bottom = -10;
-    keyLight.shadow.bias = -0.0002; // Prevent shadow acne
+    keyLight.castShadow = false; // Shadows disabled
     
     scene.add(keyLight);
 
@@ -298,17 +311,7 @@ export default function GlbTextureSwapTester() {
       rim: rimLight,
     };
 
-    // Shadow catcher (subtle grounding like WhiteWall)
-    // Position will be set after model is loaded and scaled
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 30),
-      new THREE.ShadowMaterial({ opacity: 0.08 }) // Very subtle shadow
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    scene.add(ground);
-    // Store ground reference for later positioning
-    const groundRef = ground;
+    // No shadow catcher needed (shadows disabled)
 
     // Load GLB model
     const gltfLoader = new GLTFLoader();
@@ -342,9 +345,7 @@ export default function GlbTextureSwapTester() {
         model.traverse((obj) => {
           if (!obj.isMesh || !obj.material) return;
           
-          // Enable shadows on all meshes for WhiteWall-style grounding
-          obj.castShadow = true;
-          obj.receiveShadow = false; // Model doesn't receive shadows, only ground does
+          // Shadows disabled (not needed)
           
           totalMeshes += 1;
 
@@ -448,39 +449,71 @@ export default function GlbTextureSwapTester() {
             
             // 1) Front Print (any mesh with map texture that's not glass/frame) - Make it look like a print, NOT metal
             if (finalIsPrint) {
-              if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-                // CRITICAL: Remove PBR maps that make artwork look dark/plastic
-                // Only keep the artwork map (color texture)
-                mat.normalMap = null;
-                mat.roughnessMap = null;
-                mat.metalnessMap = null;
-                mat.aoMap = null;
-                
-                // Reset color to white (no tinting)
-                mat.color.set(0xffffff);
-                
-                // Print material properties - WhiteWall vibrant, glossy look
-                mat.transparent = false;
-                mat.opacity = 1.0;
-                mat.metalness = 0.0; // NOT metal (override bad GLB values)
-                mat.roughness = 0.25; // Much glossier for vibrant WhiteWall look (was 0.45)
-                mat.clearcoat = 0.3; // Subtle clearcoat for premium glossy print look
-                mat.clearcoatRoughness = 0.2; // Smooth clearcoat
-                
-                // DO NOT assign envMap directly - use scene.environment instead
-                // This allows scene.environmentRotation to work properly
-                mat.envMap = null;
-                const baseIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
-                baseEnvMapIntensitiesRef.current.set(mat, baseIntensity);
-                mat.envMapIntensity = baseIntensity * reflectionIntensity;
-                
-                // Make sure artwork map is treated as sRGB (color-accurate)
-                if (mat.map) {
-                  mat.map.colorSpace = THREE.SRGBColorSpace;
+              // Ensure MeshPhysicalMaterial for better control (specularIntensity support)
+              if (!mat.isMeshPhysicalMaterial) {
+                const phys = new THREE.MeshPhysicalMaterial();
+                // Preserve existing maps and properties
+                if (mat.map) phys.map = mat.map;
+                phys.color.copy(mat.color || new THREE.Color(0xffffff));
+                phys.name = mat.name;
+                if (Array.isArray(obj.material)) {
+                  obj.material[matIndex] = phys;
+                } else {
+                  obj.material = phys;
                 }
-                
-                mat.needsUpdate = true;
+                mat = phys;
               }
+              
+              // CRITICAL: Remove PBR maps that make artwork look dark/plastic
+              // Only keep the artwork map (color texture)
+              mat.normalMap = null;
+              mat.roughnessMap = null;
+              mat.metalnessMap = null;
+              mat.aoMap = null;
+              
+              // Reset color to white (no tinting)
+              mat.color.set(0xffffff);
+              
+              // Print material properties - WhiteWall look: bright but no highlight bleed
+              mat.transparent = false;
+              mat.opacity = 1.0;
+              mat.metalness = 0.0; // NOT metal (override bad GLB values)
+              mat.roughness = 0.25; // Slightly glossy
+              
+              // KEY: Remove clearcoat to avoid plastic overlay feeling
+              mat.clearcoat = 0.0;
+              mat.clearcoatRoughness = 0.0;
+              
+              // DO NOT assign envMap directly - use scene.environment instead
+              // This allows scene.environmentRotation to work properly
+              mat.envMap = null;
+              
+              // KEY: Keep IBL brightness high so print doesn't go dark
+              const baseIntensity = 0.9; // High for brightness (was 0.5)
+              baseEnvMapIntensitiesRef.current.set(mat, baseIntensity);
+              mat.envMapIntensity = baseIntensity * reflectionIntensity;
+              
+              // KEY: Reduce highlight bleed without killing light (magic knob)
+              // specularIntensity controls specular highlights separately from IBL lighting
+              if (mat.specularIntensity !== undefined) {
+                mat.specularIntensity = 0.12; // 0.05-0.2 range - removes bleed but keeps brightness
+              }
+              
+              // Make sure artwork map is treated as sRGB and crisp (color-accurate + high quality)
+              if (mat.map) {
+                mat.map.colorSpace = THREE.SRGBColorSpace;
+                // Apply crisp texture settings for print quality
+                mat.map.generateMipmaps = true;
+                mat.map.minFilter = THREE.LinearMipmapLinearFilter;
+                mat.map.magFilter = THREE.LinearFilter;
+                mat.map.anisotropy = rendererRef.current
+                  ? rendererRef.current.capabilities.getMaxAnisotropy()
+                  : 16;
+                mat.map.needsUpdate = true;
+              }
+              
+              mat.needsUpdate = true;
+              
               // Set render order: print draws first
               obj.renderOrder = 1;
             }
@@ -749,9 +782,22 @@ export default function GlbTextureSwapTester() {
         const finalBox = new THREE.Box3().setFromObject(model);
         modelBoundingBoxRef.current = finalBox;
 
-        // Auto-position ground plane at bottom of model bounding box
-        const minY = finalBox.min.y;
-        groundRef.position.y = minY - 0.002; // Tiny offset below model
+        // Rotate model to vertical orientation (standing up) and face camera
+        // Rotate 90° around X-axis to stand it up (flipped from -90 to +90 to fix inversion)
+        model.rotation.x = Math.PI / 2; // +90 degrees to stand vertical (corrected from -90)
+        model.rotation.y = 0; // Face forward (toward camera)
+        model.rotation.z = 0; // No roll
+
+        // Update OrbitControls target to model center and reset camera position
+        if (controlsRef.current) {
+          const modelCenter = finalBox.getCenter(new THREE.Vector3());
+          controlsRef.current.target.copy(modelCenter);
+          
+          // Reset camera to look at model from front (vertical orientation)
+          camera.position.set(0, 0.6, 3.5); // Front view, slightly elevated
+          camera.lookAt(modelCenter);
+          controlsRef.current.update(); // Update controls
+        }
 
         scene.add(model);
         setLoading(false);
@@ -936,8 +982,21 @@ export default function GlbTextureSwapTester() {
 
     // Clone the texture to avoid sharing references
     const clonedTex = testTex.clone();
+    
+    // Make the texture crisp and high-quality for print-like appearance
     clonedTex.colorSpace = THREE.SRGBColorSpace;
     clonedTex.flipY = false; // IMPORTANT for glTF in many cases
+    
+    // Sharp sampling for print-like crispness
+    clonedTex.generateMipmaps = true; // Keep ON for stability
+    clonedTex.minFilter = THREE.LinearMipmapLinearFilter; // Good default for minification
+    clonedTex.magFilter = THREE.LinearFilter; // Crisp when viewed up close (try NearestFilter if too harsh)
+    
+    // Anisotropy is the biggest win for "print sharpness" when the surface is tilted
+    clonedTex.anisotropy = rendererRef.current
+      ? rendererRef.current.capabilities.getMaxAnisotropy()
+      : 16; // High anisotropy for maximum sharpness
+    
     clonedTex.needsUpdate = true;
 
     // Apply ONLY to map (color/diffuse texture)
@@ -1232,7 +1291,7 @@ export default function GlbTextureSwapTester() {
                 opacity: 0.8
               }}>
                 WhiteWall-style: Studio HDRI environment + minimal lights
-              </div>
+        </div>
               {[
                 { key: "exposure", label: "Exposure", min: 0.5, max: 2.0, step: 0.01, desc: "ACES Filmic tone mapping" },
                 { key: "ambient", label: "Ambient", min: 0, max: 0.5, step: 0.01, desc: "Very low (0.1-0.2 recommended)" },
@@ -1270,10 +1329,10 @@ export default function GlbTextureSwapTester() {
               {/* Reflection Intensity Control */}
               <div style={{ marginTop: 12 }}>
                 <div
-                  style={{
-                    display: "flex",
+          style={{
+            display: "flex",
                     justifyContent: "space-between",
-                    alignItems: "center",
+            alignItems: "center",
                     marginBottom: 4,
                   }}
                 >
@@ -1284,7 +1343,7 @@ export default function GlbTextureSwapTester() {
                     {(reflectionIntensity * 100).toFixed(0)}%
                   </span>
                 </div>
-                <input
+          <input
                   type="range"
                   min={0}
                   max={2.0}
