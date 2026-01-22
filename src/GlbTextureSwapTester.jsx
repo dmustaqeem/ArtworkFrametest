@@ -41,10 +41,12 @@ export default function GlbTextureSwapTester() {
     rim: 0.35, // WhiteWall-style: edge highlight (reduced from 0.4)
   });
   const [envRotation, setEnvRotation] = useState(0); // HDRI / environment yaw (degrees)
+  const [reflectionIntensity, setReflectionIntensity] = useState(1.0); // Global reflection intensity multiplier (0.0 - 2.0)
   const [showLightingControls, setShowLightingControls] = useState(false);
   const [showReflections, setShowReflections] = useState(true); // Default to true for WhiteWall-style
   const envMapRef = useRef(null);
   const pmremGeneratorRef = useRef(null);
+  const baseEnvMapIntensitiesRef = useRef(new Map()); // Store base envMapIntensity per material
 
   // Texture layer management
   const [textureLayers, setTextureLayers] = useState([]); // Array of { id, meshName, materialIndex, mapType, hasOriginal }
@@ -468,7 +470,9 @@ export default function GlbTextureSwapTester() {
                 // DO NOT assign envMap directly - use scene.environment instead
                 // This allows scene.environmentRotation to work properly
                 mat.envMap = null;
-                mat.envMapIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
+                const baseIntensity = 0.5; // Higher reflection for vibrant contrast (was 0.25)
+                baseEnvMapIntensitiesRef.current.set(mat, baseIntensity);
+                mat.envMapIntensity = baseIntensity * reflectionIntensity;
                 
                 // Make sure artwork map is treated as sRGB (color-accurate)
                 if (mat.map) {
@@ -522,7 +526,9 @@ export default function GlbTextureSwapTester() {
               // DO NOT assign envMap directly - use scene.environment instead
               // This allows scene.environmentRotation to work properly
               acrylicMat.envMap = null;
-              acrylicMat.envMapIntensity = 2.5; // Stronger highlight for WhiteWall look
+              const baseIntensity = 2.5; // Stronger highlight for WhiteWall look
+              baseEnvMapIntensitiesRef.current.set(acrylicMat, baseIntensity);
+              acrylicMat.envMapIntensity = baseIntensity * reflectionIntensity;
 
               acrylicMat.needsUpdate = true;
 
@@ -540,7 +546,9 @@ export default function GlbTextureSwapTester() {
                 mat.metalness = mat.metalness !== undefined ? Math.max(mat.metalness, 0.6) : 0.7;
                 // DO NOT assign envMap directly - use scene.environment instead
                 mat.envMap = null;
-                mat.envMapIntensity = 1.0;
+                const baseIntensity = 1.0;
+                baseEnvMapIntensitiesRef.current.set(mat, baseIntensity);
+                mat.envMapIntensity = baseIntensity * reflectionIntensity;
                 mat.needsUpdate = true;
               }
             }
@@ -553,7 +561,9 @@ export default function GlbTextureSwapTester() {
                 mat.opacity = 1.0;
                 // DO NOT assign envMap directly - use scene.environment instead
                 mat.envMap = null;
-                mat.envMapIntensity = 0.6;
+                const baseIntensity = 0.6;
+                baseEnvMapIntensitiesRef.current.set(mat, baseIntensity);
+                mat.envMapIntensity = baseIntensity * reflectionIntensity;
                 mat.needsUpdate = true;
               }
             }
@@ -813,6 +823,25 @@ export default function GlbTextureSwapTester() {
     // three.js supports environmentRotation for IBL sampling direction
     sceneRef.current.environmentRotation = new THREE.Euler(0, yaw, 0);
   }, [envRotation]);
+
+  // Update reflection intensity for all materials
+  useEffect(() => {
+    if (!modelRef.current) return;
+    
+    modelRef.current.traverse((obj) => {
+      if (!obj.isMesh || !obj.material) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+          const baseIntensity = baseEnvMapIntensitiesRef.current.get(mat);
+          if (baseIntensity !== undefined) {
+            mat.envMapIntensity = baseIntensity * reflectionIntensity;
+            mat.needsUpdate = true;
+          }
+        }
+      });
+    });
+  }, [reflectionIntensity]);
 
   // Toggle environment map (WhiteWall-style: always on by default)
   // CRITICAL: Respect per-mesh envMapIntensity values set during model loading
@@ -1238,6 +1267,37 @@ export default function GlbTextureSwapTester() {
                 </div>
               ))}
 
+              {/* Reflection Intensity Control */}
+              <div style={{ marginTop: 12 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 4,
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3 }}>
+                    Reflection Intensity
+                  </span>
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>
+                    {(reflectionIntensity * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={2.0}
+                  step={0.05}
+                  value={reflectionIntensity}
+                  onChange={(e) => setReflectionIntensity(parseFloat(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+                <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
+                  Control how strong reflections appear on all materials (0% = no reflections, 200% = very strong)
+                </div>
+              </div>
+
               {/* Environment / lighting rotation slider (horizontal HDRI alignment) */}
               <div style={{ marginTop: 12 }}>
                 <div
@@ -1279,6 +1339,7 @@ export default function GlbTextureSwapTester() {
                     rim: 0.35,
                   });
                   setEnvRotation(0);
+                  setReflectionIntensity(1.0);
                 }}
           style={{
                   width: "100%",
