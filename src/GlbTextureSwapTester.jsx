@@ -153,13 +153,7 @@ export default function GlbTextureSwapTester() {
     pmremGeneratorRef.current = pmremGenerator;
 
     // Set up environment map: Load HDRI file
-    // Try multiple HDRI files in order of preference
-    const HDRI_PATHS = [
-      "/assets/hdr/studio3.hdr",
-      "/assets/hdr/studio2.hdr",
-      "/assets/hdr/studio.hdr"
-    ];
-    
+    const HDRI_PATH = "/assets/hdr/studio3.hdr";
     const setEnvironment = (newEnvMap) => {
       if (!newEnvMap) return;
       if (envMapRef.current && envMapRef.current !== newEnvMap) {
@@ -174,53 +168,36 @@ export default function GlbTextureSwapTester() {
       scene.environment = newEnvMap;
     };
 
-    // Load HDRI environment map with multiple fallbacks
-    const loadHDRI = (paths, currentIndex = 0) => {
-      if (currentIndex >= paths.length) {
-        setError(`Failed to load any HDRI file. Tried: ${paths.join(", ")}. Please check that files exist in public/assets/hdr/`);
-        console.error("All HDRI files failed to load");
-        return;
-      }
-
-      const currentPath = paths[currentIndex];
-      console.log(`Attempting to load HDRI: ${currentPath} (${currentIndex + 1}/${paths.length})`);
-
-      new RGBELoader()
-        .setDataType(THREE.HalfFloatType)
-        .load(
-          currentPath,
-          (hdrTex) => {
-            // RGBELoader expects hdrTex to have .image property
-            // Check if texture is valid before processing
-            if (!hdrTex || !hdrTex.image) {
-              console.warn(`HDRI loaded but invalid: ${currentPath}`);
-              // Try next fallback
-              loadHDRI(paths, currentIndex + 1);
-              return;
-            }
-            try {
-              const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
-              hdrTex.dispose();
-              setEnvironment(newEnvMap);
-              console.log(`✓ HDRI loaded successfully: ${currentPath}`);
-            } catch (err) {
-              console.warn(`Failed to process HDRI ${currentPath}:`, err);
-              // Try next fallback
-              loadHDRI(paths, currentIndex + 1);
-            }
-          },
-          undefined,
-          (error) => {
-            // Error callback: HDRI file not found
-            console.error(`HDRI not found at ${currentPath}:`, error);
-            // Try next fallback
-            loadHDRI(paths, currentIndex + 1);
+    // Load HDRI environment map
+    new RGBELoader()
+      .setDataType(THREE.HalfFloatType)
+      .load(
+        HDRI_PATH,
+        (hdrTex) => {
+          // RGBELoader expects hdrTex to have .image property
+          // Check if texture is valid before processing
+          if (!hdrTex || !hdrTex.image) {
+            console.warn("HDRI loaded but invalid");
+            setError("HDRI file loaded but texture is invalid");
+            return;
           }
-        );
-    };
-
-    // Start loading HDRI files (tries each in order)
-    loadHDRI(HDRI_PATHS);
+          try {
+            const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
+            hdrTex.dispose();
+            setEnvironment(newEnvMap);
+            console.log("HDRI loaded successfully:", HDRI_PATH);
+          } catch (err) {
+            console.warn("Failed to process HDRI:", err);
+            setError(`Failed to process HDRI: ${err.message}`);
+          }
+        },
+        undefined,
+        (error) => {
+          // Error callback: HDRI file not found
+          console.error("HDRI not found at", HDRI_PATH, error);
+          setError(`Failed to load HDRI: ${HDRI_PATH}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`);
+        }
+      );
 
     // WhiteWall-style lighting: Minimal, subtle lights
     // 90% of lighting comes from environment map (HDRI), only subtle direct lights for edge definition
