@@ -34,9 +34,9 @@ export default function GlbTextureSwapTester() {
   const [error, setError] = useState("");
   const [materialSummary, setMaterialSummary] = useState(null); // { totalMeshes, totalMaterials, byType: { [type]: count } }
   const [lighting, setLighting] = useState({
-    exposure: 1.40, // Even brighter for WhiteWall-style high-key look
-    ambient: 0.05, // WhiteWall-style: very low (reduced from 0.15 to avoid flat lighting)
-    key: 0.45, // WhiteWall-style: subtle key light (reduced from 0.6)
+    exposure: 2.00, // Even brighter for WhiteWall-style high-key look
+    ambient: 0.50, // WhiteWall-style: very low (reduced from 0.15 to avoid flat lighting)
+    key: 1.50, // WhiteWall-style: subtle key light (reduced from 0.6)
     fill: 0.25, // WhiteWall-style: soft fill (reduced from 0.3)
     rim: 0.35, // WhiteWall-style: edge highlight (reduced from 0.4)
   });
@@ -154,6 +154,7 @@ export default function GlbTextureSwapTester() {
 
     // Set up environment map: Load HDRI file
     const HDRI_PATH = "/assets/hdr/studio3.hdr";
+    const HDRI_FALLBACK = "/assets/hdr/studio2.hdr"; // Fallback if studio3 not found
     const setEnvironment = (newEnvMap) => {
       if (!newEnvMap) return;
       if (envMapRef.current && envMapRef.current !== newEnvMap) {
@@ -168,32 +169,59 @@ export default function GlbTextureSwapTester() {
       scene.environment = newEnvMap;
     };
 
-    // Load HDRI environment map
-    new RGBELoader()
-      .setDataType(THREE.HalfFloatType)
-      .load(
-        HDRI_PATH,
-        (hdrTex) => {
-          // RGBELoader expects hdrTex to have .image property
-          // Check if texture is valid before processing
-          if (!hdrTex || !hdrTex.image) {
-            console.warn("HDRI loaded but invalid");
-            return;
+    // Load HDRI environment map with fallback
+    const loadHDRI = (path, isFallback = false) => {
+      new RGBELoader()
+        .setDataType(THREE.HalfFloatType)
+        .load(
+          path,
+          (hdrTex) => {
+            // RGBELoader expects hdrTex to have .image property
+            // Check if texture is valid before processing
+            if (!hdrTex || !hdrTex.image) {
+              console.warn("HDRI loaded but invalid");
+              if (!isFallback) {
+                // Try fallback
+                console.log("Trying fallback HDRI:", HDRI_FALLBACK);
+                loadHDRI(HDRI_FALLBACK, true);
+              } else {
+                setError("Failed to load HDRI environment map");
+              }
+              return;
+            }
+            try {
+              const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
+              hdrTex.dispose();
+              setEnvironment(newEnvMap);
+              console.log(`HDRI loaded successfully: ${path}`);
+            } catch (err) {
+              console.warn("Failed to process HDRI:", err);
+              if (!isFallback) {
+                // Try fallback
+                console.log("Trying fallback HDRI:", HDRI_FALLBACK);
+                loadHDRI(HDRI_FALLBACK, true);
+              } else {
+                setError("Failed to process HDRI environment map");
+              }
+            }
+          },
+          undefined,
+          (error) => {
+            // Error callback: HDRI file not found
+            console.error(`HDRI not found at ${path}:`, error);
+            if (!isFallback) {
+              // Try fallback
+              console.log("Trying fallback HDRI:", HDRI_FALLBACK);
+              loadHDRI(HDRI_FALLBACK, true);
+            } else {
+              setError(`Failed to load HDRI: ${path} and fallback ${HDRI_FALLBACK} not found. Please check that the files exist in public/assets/hdr/`);
+            }
           }
-          try {
-            const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
-            hdrTex.dispose();
-            setEnvironment(newEnvMap);
-          } catch (err) {
-            console.warn("Failed to process HDRI:", err);
-          }
-        },
-        undefined,
-        (error) => {
-          // Error callback: HDRI file not found
-          console.warn("HDRI not found at", HDRI_PATH, error);
-        }
-      );
+        );
+    };
+
+    // Start loading the primary HDRI
+    loadHDRI(HDRI_PATH);
 
     // WhiteWall-style lighting: Minimal, subtle lights
     // 90% of lighting comes from environment map (HDRI), only subtle direct lights for edge definition
