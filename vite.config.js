@@ -6,5 +6,11 @@ export default defineConfig({
   publicDir: 'public',
   build: {
     copyPublicDir: true,
+    assetsInlineLimit: 0, // Don't inline any assets, keep HDR files as separate files
+  },
+  server: {
+    fs: {
+      strict: false, // Allow serving files from outside root
+    },
   },
 })
