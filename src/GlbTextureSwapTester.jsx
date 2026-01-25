@@ -153,7 +153,7 @@ export default function GlbTextureSwapTester() {
     pmremGeneratorRef.current = pmremGenerator;
 
     // Set up environment map: Load HDRI file
-    const HDRI_PATH = "/assets/hdr/studio7.hdr";
+    const HDRI_PATH = "/assets/hdr/studio3.hdr";
     const setEnvironment = (newEnvMap) => {
       if (!newEnvMap) return;
       if (envMapRef.current && envMapRef.current !== newEnvMap) {
