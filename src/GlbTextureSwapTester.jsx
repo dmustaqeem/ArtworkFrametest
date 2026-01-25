@@ -153,8 +153,13 @@ export default function GlbTextureSwapTester() {
     pmremGeneratorRef.current = pmremGenerator;
 
     // Set up environment map: Load HDRI file
-    const HDRI_PATH = "/assets/hdr/studio3.hdr";
-    const HDRI_FALLBACK = "/assets/hdr/studio2.hdr"; // Fallback if studio3 not found
+    // Try multiple HDRI files in order of preference
+    const HDRI_PATHS = [
+      "/assets/hdr/studio3.hdr",
+      "/assets/hdr/studio2.hdr",
+      "/assets/hdr/studio.hdr"
+    ];
+    
     const setEnvironment = (newEnvMap) => {
       if (!newEnvMap) return;
       if (envMapRef.current && envMapRef.current !== newEnvMap) {
@@ -169,59 +174,53 @@ export default function GlbTextureSwapTester() {
       scene.environment = newEnvMap;
     };
 
-    // Load HDRI environment map with fallback
-    const loadHDRI = (path, isFallback = false) => {
+    // Load HDRI environment map with multiple fallbacks
+    const loadHDRI = (paths, currentIndex = 0) => {
+      if (currentIndex >= paths.length) {
+        setError(`Failed to load any HDRI file. Tried: ${paths.join(", ")}. Please check that files exist in public/assets/hdr/`);
+        console.error("All HDRI files failed to load");
+        return;
+      }
+
+      const currentPath = paths[currentIndex];
+      console.log(`Attempting to load HDRI: ${currentPath} (${currentIndex + 1}/${paths.length})`);
+
       new RGBELoader()
         .setDataType(THREE.HalfFloatType)
         .load(
-          path,
+          currentPath,
           (hdrTex) => {
             // RGBELoader expects hdrTex to have .image property
             // Check if texture is valid before processing
             if (!hdrTex || !hdrTex.image) {
-              console.warn("HDRI loaded but invalid");
-              if (!isFallback) {
-                // Try fallback
-                console.log("Trying fallback HDRI:", HDRI_FALLBACK);
-                loadHDRI(HDRI_FALLBACK, true);
-              } else {
-                setError("Failed to load HDRI environment map");
-              }
+              console.warn(`HDRI loaded but invalid: ${currentPath}`);
+              // Try next fallback
+              loadHDRI(paths, currentIndex + 1);
               return;
             }
             try {
               const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
               hdrTex.dispose();
               setEnvironment(newEnvMap);
-              console.log(`HDRI loaded successfully: ${path}`);
+              console.log(`✓ HDRI loaded successfully: ${currentPath}`);
             } catch (err) {
-              console.warn("Failed to process HDRI:", err);
-              if (!isFallback) {
-                // Try fallback
-                console.log("Trying fallback HDRI:", HDRI_FALLBACK);
-                loadHDRI(HDRI_FALLBACK, true);
-              } else {
-                setError("Failed to process HDRI environment map");
-              }
+              console.warn(`Failed to process HDRI ${currentPath}:`, err);
+              // Try next fallback
+              loadHDRI(paths, currentIndex + 1);
             }
           },
           undefined,
           (error) => {
             // Error callback: HDRI file not found
-            console.error(`HDRI not found at ${path}:`, error);
-            if (!isFallback) {
-              // Try fallback
-              console.log("Trying fallback HDRI:", HDRI_FALLBACK);
-              loadHDRI(HDRI_FALLBACK, true);
-            } else {
-              setError(`Failed to load HDRI: ${path} and fallback ${HDRI_FALLBACK} not found. Please check that the files exist in public/assets/hdr/`);
-            }
+            console.error(`HDRI not found at ${currentPath}:`, error);
+            // Try next fallback
+            loadHDRI(paths, currentIndex + 1);
           }
         );
     };
 
-    // Start loading the primary HDRI
-    loadHDRI(HDRI_PATH);
+    // Start loading HDRI files (tries each in order)
+    loadHDRI(HDRI_PATHS);
 
     // WhiteWall-style lighting: Minimal, subtle lights
     // 90% of lighting comes from environment map (HDRI), only subtle direct lights for edge definition
