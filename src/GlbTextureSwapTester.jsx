@@ -152,86 +152,8 @@ export default function GlbTextureSwapTester() {
     pmremGenerator.compileEquirectangularShader();
     pmremGeneratorRef.current = pmremGenerator;
 
-    // Create WhiteWall-style studio environment map
-    // This mimics a soft, bright studio HDRI for even illumination
-    const createStudioEnvironment = () => {
-      const envScene = new THREE.Scene();
-      
-      // WhiteWall-style softbox environment: bright panels that create distinct reflection streaks
-      // This produces recognizable highlights like a real photo studio
-      
-      // Big TOP softbox - strongest highlight (creates top strip light)
-      const top = new THREE.Mesh(
-        new THREE.PlaneGeometry(30, 18),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xffffff,
-          emissiveIntensity: 3.0, // Much brighter for distinct highlights
-          side: THREE.DoubleSide
-        })
-      );
-      top.rotation.x = Math.PI / 2;
-      top.position.set(0, 10, 0);
-      envScene.add(top);
-
-      // LEFT softbox - medium brightness
-      const left = new THREE.Mesh(
-        new THREE.PlaneGeometry(20, 20),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xffffff,
-          emissiveIntensity: 1.6,
-          side: THREE.DoubleSide
-        })
-      );
-      left.rotation.y = Math.PI / 2;
-      left.position.set(-10, 2, 0);
-      envScene.add(left);
-
-      // RIGHT softbox - medium brightness
-      const right = left.clone();
-      right.position.set(10, 2, 0);
-      right.rotation.y = -Math.PI / 2;
-      envScene.add(right);
-
-      // BACK softbox - low brightness (subtle fill)
-      const back = new THREE.Mesh(
-        new THREE.PlaneGeometry(20, 20),
-        new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          emissive: 0xffffff,
-          emissiveIntensity: 0.6,
-          side: THREE.DoubleSide
-        })
-      );
-      back.position.set(0, 2, -12);
-      envScene.add(back);
-
-      // Keep rest DARK so reflections have contrast (not flat lighting)
-      // Very low ambient so bright panels create distinct highlights
-      envScene.add(new THREE.AmbientLight(0xffffff, 0.05));
-
-      // Dark wrap for contrast control (WhiteWall reflections need darker areas too)
-      // This large dark sphere increases reflection contrast massively
-      const wrap = new THREE.Mesh(
-        new THREE.SphereGeometry(60, 32, 16),
-        new THREE.MeshStandardMaterial({
-          color: 0x111111, // Very dark
-          metalness: 0,
-          roughness: 1,
-          side: THREE.BackSide // Inside faces only
-        })
-      );
-      envScene.add(wrap);
-
-      // Create environment map from the softbox scene
-      const envMap = pmremGenerator.fromScene(envScene, 0.04).texture;
-      return envMap;
-    };
-
-    // Set up environment map:
-    // Prefer a real high-key studio HDRI if present, otherwise fallback to our procedural studio environment.
-    const HDRI_PATH = "/assets/hdr/studio.hdr";
+    // Set up environment map: Load HDRI file
+    const HDRI_PATH = "/assets/hdr/studio7.hdr";
     const setEnvironment = (newEnvMap) => {
       if (!newEnvMap) return;
       if (envMapRef.current && envMapRef.current !== newEnvMap) {
@@ -246,11 +168,7 @@ export default function GlbTextureSwapTester() {
       scene.environment = newEnvMap;
     };
 
-    // Set fallback immediately (scene needs lighting right away)
-    const fallbackEnv = createStudioEnvironment();
-    setEnvironment(fallbackEnv);
-
-    // Try to load real HDRI (will replace fallback if successful)
+    // Load HDRI environment map
     new RGBELoader()
       .setDataType(THREE.HalfFloatType)
       .load(
@@ -259,8 +177,8 @@ export default function GlbTextureSwapTester() {
           // RGBELoader expects hdrTex to have .image property
           // Check if texture is valid before processing
           if (!hdrTex || !hdrTex.image) {
-            console.log("HDRI loaded but invalid, using fallback");
-            return; // Keep fallback environment
+            console.warn("HDRI loaded but invalid");
+            return;
           }
           try {
             const newEnvMap = pmremGenerator.fromEquirectangular(hdrTex).texture;
@@ -268,14 +186,12 @@ export default function GlbTextureSwapTester() {
             setEnvironment(newEnvMap);
           } catch (err) {
             console.warn("Failed to process HDRI:", err);
-            // Keep fallback environment
           }
         },
         undefined,
-        () => {
+        (error) => {
           // Error callback: HDRI file not found
-          console.log("HDRI not found, using procedural studio environment");
-          // Fallback already set above
+          console.warn("HDRI not found at", HDRI_PATH, error);
         }
       );
 
@@ -735,7 +651,7 @@ export default function GlbTextureSwapTester() {
         console.log(`   Tone mapping exposure: ${renderer.toneMappingExposure}`);
         console.log(`   Output color space: ${renderer.outputColorSpace === THREE.SRGBColorSpace ? "SRGBColorSpace ✓" : "Other"}`);
         console.log(`   Environment map: ${scene.environment ? "SET ✓" : "NOT SET"}`);
-        console.log(`   HDRI path expected: "/assets/hdr/studio.hdr"`);
+        console.log(`   HDRI path expected: "/assets/hdr/studio5.hdr"`);
         console.log(`   HDRI format: .hdr (RGBE/Radiance)`);
 
         // 7) Material Properties Summary
@@ -782,11 +698,7 @@ export default function GlbTextureSwapTester() {
         const finalBox = new THREE.Box3().setFromObject(model);
         modelBoundingBoxRef.current = finalBox;
 
-        // Rotate model to vertical orientation (standing up) and face camera
-        // Rotate 90° around X-axis to stand it up (flipped from -90 to +90 to fix inversion)
-        model.rotation.x = Math.PI / 2; // +90 degrees to stand vertical (corrected from -90)
-        model.rotation.y = 0; // Face forward (toward camera)
-        model.rotation.z = 0; // No roll
+        // Keep model in its original orientation (no rotation applied)
 
         // Update OrbitControls target to model center and reset camera position
         if (controlsRef.current) {
