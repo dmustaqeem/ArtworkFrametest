@@ -1,0 +1,152 @@
+WHITE COLOR REMOVAL FROM IMAGES - ISSUE SUMMARY
+================================================
+
+OVERVIEW
+--------
+The application has a feature to remove white/background colors from texture images when applying them to certain meshes. This is primarily used for Wood and Mirror materials on FullBleed meshes (Artwork_FullBleed and Wood_FullBleed).
+
+HOW IT WORKS
+------------
+1. The system processes texture images pixel by pixel
+2. It identifies white or bright pixels based on:
+   - Specific color matching (with tolerance) if COLOR is specified
+   - Brightness threshold (default 0.9) if no specific color is provided
+3. Matching pixels are made transparent (alpha set to 0)
+4. The processed image is then applied as a texture to the material
+
+CONFIGURATION
+-------------
+Location: src/config/appConfig.jsx
+
+Current Settings:
+- ENABLED: true (can be set to false to disable entirely)
+- COLOR: "#FFFFFF" (hex color to remove, or null for brightness threshold)
+- TOLERANCE: 30 (color matching tolerance 0-255, higher = more lenient)
+
+IMPLEMENTATION LOCATIONS
+------------------------
+1. src/managers/TextureManager.jsx
+   - Method: replaceWhiteWithMetalColor()
+   - Used by: TextureLayerManager and useTextureOperations
+
+2. src/components/TextureLayerManager.jsx
+   - Local function: replaceWhiteWithMetalColor()
+   - Used for: Mirror and Wood materials on FullBleed meshes
+   - Falls back to local implementation if TextureManager not available
+
+3. src/hooks/useTextureOperations.jsx
+   - Uses: TextureManager.replaceWhiteWithMetalColor()
+   - Used for: Wood materials on Artwork_FullBleed and Wood_FullBleed meshes
+
+4. src/viewer/useArtworkViewer.jsx
+   - May contain additional white removal logic
+
+WHEN IT'S APPLIED
+-----------------
+- Material Type: WOOD or MIRROR
+- Mesh Type: Artwork_FullBleed or Wood_FullBleed
+- Condition: MATERIAL_CONFIG.REMOVE_COLOR.ENABLED must be true
+
+MATERIAL PROPERTIES SET
+-----------------------
+When white removal is applied, the material is configured with:
+- transparent: true
+- opacity: 1.0
+- alphaTest: 0.01 (helps with transparency rendering)
+- side: THREE.DoubleSide
+- depthWrite: false (important for transparency rendering)
+
+KNOWN ISSUES / POTENTIAL PROBLEMS
+---------------------------------
+
+1. TOLERANCE SETTINGS
+   - Current tolerance is 30 (0-255 range)
+   - Too low: May not remove all white variations (off-whites, slightly gray whites)
+   - Too high: May remove desired colors that are close to white
+   - Issue: Finding the right balance for different image types
+
+2. COLOR MATCHING LOGIC
+   - Uses strict individual channel matching (rDiff, gDiff, bDiff all must be within tolerance)
+   - This means a pixel must be close to white in ALL channels to be removed
+   - Issue: May miss pixels that are "white enough" but not perfectly white in all channels
+
+3. BRIGHTNESS THRESHOLD
+   - Default threshold is 0.9 (90% brightness)
+   - Calculated as: (r + g + b) / (3 * 255)
+   - Issue: May not work well for images with varying lighting or shadows
+
+4. MULTIPLE IMPLEMENTATIONS
+   - White removal logic exists in multiple files (TextureManager, TextureLayerManager)
+   - Issue: Inconsistencies between implementations could cause different results
+   - Issue: Maintenance burden - changes need to be made in multiple places
+
+5. IMAGE PROCESSING QUALITY
+   - Uses HTML Canvas 2D API for pixel manipulation
+   - Image smoothing is enabled in TextureLayerManager but may not be in TextureManager
+   - Issue: Potential quality differences between implementations
+
+6. TRANSPARENCY RENDERING
+   - Requires material transparency settings (transparent, depthWrite, alphaTest)
+   - Issue: May cause rendering artifacts or performance issues
+   - Issue: May not work correctly with certain lighting setups
+
+7. COLOR SPACE HANDLING
+   - No explicit color space conversion mentioned in white removal code
+   - Issue: May behave differently with different color spaces (sRGB vs Linear)
+
+8. EDGE DETECTION / ANTI-ALIASING
+   - No edge smoothing or anti-aliasing in the removal process
+   - Issue: May create jagged edges or artifacts at white/non-white boundaries
+
+9. PERFORMANCE
+   - Processes entire image pixel by pixel
+   - Issue: May be slow for large images
+   - Issue: No optimization for images that don't need processing
+
+10. CONFIGURATION FLEXIBILITY
+    - Hard-coded threshold (0.9) in some places
+    - Issue: Cannot easily adjust threshold per material type or mesh
+    - Issue: Tolerance is global, may need different values for different images
+
+TROUBLESHOOTING TIPS
+--------------------
+1. If white areas are not being removed:
+   - Increase TOLERANCE value (try 40-50)
+   - Check if COLOR is set correctly (#FFFFFF)
+   - Verify ENABLED is true
+   - Check if material type and mesh type match conditions
+
+2. If too much is being removed:
+   - Decrease TOLERANCE value (try 10-20)
+   - Check if brightness threshold (0.9) is too low
+   - Verify the image doesn't have desired white/light colors
+
+3. If transparency looks wrong:
+   - Check material transparency settings are applied
+   - Verify depthWrite is false
+   - Check alphaTest value (0.01)
+   - Ensure material.side is set to THREE.DoubleSide
+
+4. If results differ between materials:
+   - Check which implementation is being used (TextureManager vs local)
+   - Verify both implementations have same logic
+   - Check if image smoothing settings differ
+
+FILES TO CHECK FOR ISSUES
+--------------------------
+1. src/config/appConfig.jsx - Configuration settings
+2. src/managers/TextureManager.jsx - Main implementation
+3. src/components/TextureLayerManager.jsx - Local implementation and usage
+4. src/hooks/useTextureOperations.jsx - Usage in texture operations
+5. src/viewer/useArtworkViewer.jsx - Additional usage if any
+
+SUGGESTED IMPROVEMENTS
+----------------------
+1. Consolidate implementations into single source
+2. Add per-material-type configuration
+3. Add edge smoothing/anti-aliasing
+4. Add performance optimization (skip processing if not needed)
+5. Add color space handling
+6. Add preview/visual feedback for tolerance adjustments
+7. Add support for different removal algorithms (brightness vs color matching)
+8. Add logging/debugging tools to see what pixels are being removed

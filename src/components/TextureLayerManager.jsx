@@ -1,0 +1,1253 @@
+import { useState, useRef, useEffect } from "react";
+import * as THREE from "three";
+import { MATERIAL_CONFIG, MODEL_PATHS } from "../config/appConfig.jsx";
+
+/**
+ * TextureLayerManager Component
+ * 
+ * A reusable component for managing texture layers on a 3D model.
+ * Automatically detects all texture layers and provides UI to apply test textures.
+ * 
+ * @example
+ * ```jsx
+ * import TextureLayerManager from './TextureLayerManager';
+ * 
+ * <TextureLayerManager
+ *   model={myModel}
+ *   textureLoader={textureLoader}
+ *   testTexturePaths={["/path/to/texture1.jpg", "/path/to/texture2.jpg"]}
+ *   renderer={renderer}
+ *   scene={scene}
+ *   camera={camera}
+ *   collapsible={true}
+ *   onLayerChange={(layerId, textureNumber, texture) => {
+ *     console.log('Layer changed:', layerId, textureNumber);
+ *   }}
+ * />
+ * ```
+ * 
+ * @param {Object} props
+ * @param {THREE.Object3D} props.model - The 3D model to manage textures for
+ * @param {THREE.TextureLoader} props.textureLoader - Optional texture loader (creates one if not provided)
+ * @param {string[]} props.testTexturePaths - Array of test texture paths (default: ["/assets/frames/image4.png", "/assets/frames/Image5.png"])
+ * @param {string[]} props.textureMapTypes - Array of texture map types to detect (default: common PBR maps)
+ * @param {Array} props.textureLayers - Optional pre-detected texture layers (if provided, won't auto-detect)
+ * @param {Function} props.onLayersDetected - Optional callback when layers are detected (receives layers array and originalTextures Map)
+ * @param {Function} props.onLayerChange - Optional callback when a layer is changed (layerId, textureNumber, texture)
+ * @param {Object} props.renderer - Optional renderer reference for forcing updates
+ * @param {Object} props.scene - Optional scene reference for forcing updates
+ * @param {Object} props.camera - Optional camera reference for forcing updates
+ * @param {boolean} props.collapsible - Whether the UI should be collapsible (default: true)
+ * @param {string} props.materialType - Optional material type (e.g., "ACRYLIC", "METAL") to determine PBR preservation behavior
+ * @param {Object} props.textureManager - Optional TextureManager instance for better white color removal (same as metals use)
+ * @param {Object} props.style - Optional custom styles for the container
+ */
+export default function TextureLayerManager({
+  model,
+  textureLoader,
+  testTexturePaths = ["/assets/frames/image4.png", "/assets/frames/Image5.png"],
+  textureMapTypes = [
+    'map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap',
+    'emissiveMap', 'alphaMap', 'displacementMap', 'bumpMap',
+    'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap',
+    'sheenColorMap', 'sheenRoughnessMap', 'transmissionMap', 'thicknessMap'
+  ],
+  textureLayers: externalTextureLayers,
+  onLayersDetected,
+  onLayerChange,
+  renderer,
+  scene,
+  camera,
+  collapsible = true,
+  materialType = null,
+  textureManager = null,
+  style = {}
+}) {
+  const [textureLayers, setTextureLayers] = useState(externalTextureLayers || []);
+  const [showLayers, setShowLayers] = useState(!collapsible);
+  // Track texture offsets and repeat for each layer
+  const [textureOffsets, setTextureOffsets] = useState(new Map());
+  const [textureRepeats, setTextureRepeats] = useState(new Map());
+  const [loading, setLoading] = useState(!externalTextureLayers);
+  
+  const originalTexturesRef = useRef(new Map());
+  const originalMaterialPropertiesRef = useRef(new Map()); // Map<layerId, originalMaterialProperties>
+  const testTexturesRef = useRef([]);
+  const loaderRef = useRef(textureLoader || new THREE.TextureLoader());
+
+  // Sync external textureLayers if provided
+  useEffect(() => {
+    if (externalTextureLayers) {
+      setTextureLayers(externalTextureLayers);
+      setLoading(false);
+    }
+  }, [externalTextureLayers]);
+
+  // Detect texture layers from model (only if not provided externally)
+  useEffect(() => {
+    if (!model || externalTextureLayers) {
+      if (externalTextureLayers) {
+        setLoading(false);
+      }
+      return;
+    }
+
+    const layers = [];
+    const originalTextures = new Map();
+    let layerIdCounter = 0;
+
+    model.traverse((obj) => {
+      if (!obj.isMesh || !obj.material) return;
+
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+
+      mats.forEach((mat, matIndex) => {
+        // CRITICAL FIX #2: Only detect 'map' layers for artwork editing
+        // PBR maps (normal, roughness, metalness) should NOT be swappable
+        const mapType = "map";
+        if (mat[mapType]) {
+          const layerId = `layer_${layerIdCounter++}`;
+          const layerInfo = {
+            id: layerId,
+            meshName: obj.name || "Unnamed",
+            materialIndex: matIndex,
+            mapType: mapType, // Only map is swappable
+            hasOriginal: true,
+            material: mat,
+            mesh: obj
+          };
+          layers.push(layerInfo);
+          // Store original texture
+          originalTextures.set(layerId, mat[mapType]);
+        }
+      });
+    });
+
+    setTextureLayers(layers);
+    originalTexturesRef.current = originalTextures;
+    setLoading(false);
+    
+    // Notify parent if callback provided
+    if (onLayersDetected) {
+      onLayersDetected(layers, originalTextures);
+    }
+  }, [model, textureMapTypes, externalTextureLayers, onLayersDetected]);
+
+  // Load test textures
+  useEffect(() => {
+    if (!model || testTexturePaths.length === 0) return;
+
+    // Clear old textures before loading new ones
+    testTexturesRef.current.forEach(tex => {
+      if (tex && tex.dispose) {
+        try {
+          tex.dispose();
+        } catch (e) {
+          // Error disposing old test texture
+        }
+      }
+    });
+    
+    testTexturesRef.current = [];
+    let loadedCount = 0;
+    const totalTextures = testTexturePaths.length;
+
+    testTexturePaths.forEach((path, index) => {
+      loaderRef.current.load(
+        path,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          testTexturesRef.current[index] = texture;
+          loadedCount++;
+          // console.log(`✓ Successfully loaded texture ${index + 1}: ${path}`);
+        },
+        undefined,
+        (error) => {
+          // Failed to load texture
+          console.error(`✗ Failed to load texture ${index + 1}: ${path}`, error);
+          testTexturesRef.current[index] = null;
+          loadedCount++;
+        }
+      );
+    });
+    }, [model, testTexturePaths]);
+
+  // Helper function to make specific color pixels transparent for metal materials
+  // This removes specified color areas so the metal material underneath shows through
+  // @param image - The image to process
+  // @param metalColorType - Metal color type (for backward compatibility, not used for color removal)
+  // @param threshold - Brightness threshold (0-1) for white removal (default: 0.9)
+  // @param colorToRemove - Optional: Specific color to remove as {r, g, b} (0-255) or hex string (e.g., "#ffffff"). Set to null to disable color removal.
+  // @param colorTolerance - Tolerance for color matching (0-255, default: 10)
+  // @param enableColorRemoval - If false, skips all color removal processing and returns original image (default: true)
+  const replaceWhiteWithMetalColor = (image, metalColorType, threshold = 0.9, colorToRemove = null, colorTolerance = 10, enableColorRemoval = true) => {
+    // If color removal is disabled, return original image
+    if (!enableColorRemoval) {
+      return image;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width || image.naturalWidth;
+    canvas.height = image.height || image.naturalHeight;
+    const ctx = canvas.getContext('2d', { 
+      willReadFrequently: true,
+      alpha: true 
+    });
+    
+    // Enable image smoothing for better quality
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    // Clear canvas to ensure no old data persists
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw the image onto canvas
+    ctx.drawImage(image, 0, 0);
+    
+    // Get image data
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    // Parse colorToRemove if provided
+    let targetColor = null;
+    if (colorToRemove) {
+      if (typeof colorToRemove === 'string') {
+        // Hex string like "#ffffff" or "ffffff"
+        const hex = colorToRemove.replace('#', '');
+        targetColor = {
+          r: parseInt(hex.substring(0, 2), 16),
+          g: parseInt(hex.substring(2, 4), 16),
+          b: parseInt(hex.substring(4, 6), 16)
+        };
+      } else if (typeof colorToRemove === 'object' && colorToRemove.r !== undefined) {
+        // Object with r, g, b properties
+        targetColor = {
+          r: Math.round(colorToRemove.r),
+          g: Math.round(colorToRemove.g),
+          b: Math.round(colorToRemove.b)
+        };
+      }
+    }
+    
+    // Process each pixel
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      let shouldRemove = false;
+      
+      if (targetColor) {
+        // Remove specific color (with tolerance) - same clean logic as metals
+        const rDiff = Math.abs(r - targetColor.r);
+        const gDiff = Math.abs(g - targetColor.g);
+        const bDiff = Math.abs(b - targetColor.b);
+        
+        // Check if pixel color matches target color within tolerance
+        // Use strict individual channel matching for cleaner white removal (same as metals)
+        if (rDiff <= colorTolerance && gDiff <= colorTolerance && bDiff <= colorTolerance) {
+          shouldRemove = true;
+        }
+      } else {
+        // Default: Remove white/bright pixels (brightness threshold)
+        const brightness = (r + g + b) / (3 * 255);
+        if (brightness >= threshold) {
+          shouldRemove = true;
+        }
+      }
+      
+      // If pixel should be removed, make it TRANSPARENT
+      if (shouldRemove) {
+        data[i + 3] = 0; // Set alpha to 0 (fully transparent)
+      }
+      // Otherwise, keep the pixel as is (preserve original alpha)
+    }
+    
+    // Put processed data back
+    ctx.putImageData(imageData, 0, 0);
+    
+    return canvas;
+  };
+
+  // Apply test texture to a specific layer
+  const applyTestTextureToLayer = (layerId, textureNumber) => {
+    const layer = textureLayers.find(l => l.id === layerId);
+    if (!layer) {
+      return;
+    }
+    
+    if (!layer.material || !layer.mesh) {
+      return;
+    }
+
+    // CRITICAL FIX #1: Only allow swapping 'map' type
+    if (layer.mapType !== "map") {
+      return;
+    }
+
+    // Get fresh reference to mesh
+    const mesh = layer.mesh;
+    if (!mesh || !mesh.material) {
+      return;
+    }
+
+    const testTex = testTexturesRef.current[textureNumber - 1];
+    if (!testTex) {
+      return;
+    }
+
+    // Extract actual image from texture
+    let sourceImage = testTex.image;
+    if (!sourceImage && testTex.source) {
+      sourceImage = testTex.source.data;
+    }
+    
+    // Check if texture image is actually loaded
+    if (!sourceImage) {
+      // Try to reload the texture
+      const path = testTexturePaths[textureNumber - 1];
+      if (path) {
+        loaderRef.current.load(
+          path,
+          (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            testTexturesRef.current[textureNumber - 1] = texture;
+            // Retry applying texture
+            setTimeout(() => applyTestTextureToLayer(layerId, textureNumber), 100);
+          },
+          undefined,
+          (error) => {
+            // Failed to reload texture
+            console.error(`✗ Failed to reload texture: ${path}`, error);
+          }
+        );
+      }
+      return;
+    }
+
+    // Check if image is loaded (for HTMLImageElement)
+    if (sourceImage instanceof HTMLImageElement && !sourceImage.complete) {
+      // Wait for texture to load
+      sourceImage.onload = () => {
+        // Retry after image loads
+        setTimeout(() => applyTestTextureToLayer(layerId, textureNumber), 100);
+      };
+      sourceImage.onerror = (error) => {
+        // Failed to load image
+        console.error(`✗ Image failed to load: ${sourceImage.src || 'unknown'}`, error);
+      };
+      return;
+    }
+
+    // Check if image is a canvas and has valid dimensions
+    if (sourceImage instanceof HTMLCanvasElement) {
+      if (sourceImage.width === 0 || sourceImage.height === 0) {
+        return;
+      }
+    }
+
+    // Get the material (handle both single material and material arrays)
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const mat = mats[layer.materialIndex];
+    if (!mat) {
+      return;
+    }
+    
+    // Verify material is still valid
+    if (!mat.isMaterial) {
+      return;
+    }
+
+    // For metals and mirrors, apply texture to Artwork_FullBleed and Artwork_Shrunk (like acrylic)
+    // No white color removal - using PNGs now
+    const isMetal = materialType === "METAL" || materialType === "METAL_BOX";
+    const isMirror = materialType === "MIRROR";
+    const isWood = materialType === "WOOD";
+    const isAcrylic = materialType === "ACRYLIC";
+    const isFullBleed = layer.meshType === "fullBleed";
+    const isShrunk = layer.meshType === "shrunk";
+    const isFrame = layer.meshType === "frame";
+    
+    if (isMetal) {
+      // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
+      if (isFrame) {
+        console.log('Applying texture to frame mesh:', layer.meshName);
+      } else if (isFullBleed || isShrunk) {
+        console.log('Applying texture to artwork mesh (metal):', layer.meshName, 'Mesh type:', layer.meshType);
+      } else {
+        // Skip other mesh types for metals
+        console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for metals. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
+        return;
+      }
+    }
+    
+    if (isMirror) {
+      // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
+      if (isFrame) {
+        console.log('Applying texture to frame mesh:', layer.meshName);
+      } else if (isFullBleed || isShrunk) {
+        console.log('Applying texture to artwork mesh (mirror):', layer.meshName, 'Mesh type:', layer.meshType);
+      } else {
+        // Skip other mesh types for mirrors
+        console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for mirrors. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
+        return;
+      }
+    }
+
+    // Get fresh material reference before any operations
+    // This ensures we're working with the actual material on the mesh
+    const matsFresh = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const finalMat = matsFresh[layer.materialIndex];
+    
+    if (!finalMat) {
+      return;
+    }
+    
+    // No image processing applied
+    let processedImage = sourceImage;
+    
+    // Dispose old texture to prevent remnants (but only if it's not the original)
+    const originalTex = originalTexturesRef.current.get(layerId);
+    const currentTex = finalMat.map;
+    
+    // Always allow swapping - dispose current texture if it exists and is not the original
+    if (currentTex && currentTex !== originalTex) {
+      try {
+        // Check if texture is still valid before disposing
+        if (currentTex.dispose && typeof currentTex.dispose === 'function') {
+          currentTex.dispose();
+        }
+      } catch (e) {
+        // Error disposing old texture
+      }
+      // Clear reference immediately to prevent stale references
+      finalMat.map = null;
+    } else if (currentTex === originalTex) {
+      // If current texture IS the original, we can still swap - just clear the reference
+      finalMat.map = null;
+    }
+
+    // PRESERVE ALL PBR MAPS - Don't remove anything from the original model
+    // Keep all original PBR properties intact (normalMap, roughnessMap, metalnessMap, aoMap, emissiveMap)
+    // This ensures the original model's material properties are never modified
+
+    // Validate processed image before creating texture
+    if (!processedImage) {
+      return;
+    }
+    
+    // Validate image dimensions
+    if (processedImage instanceof HTMLCanvasElement) {
+      if (processedImage.width === 0 || processedImage.height === 0) {
+        return;
+      }
+    } else if (processedImage instanceof HTMLImageElement) {
+      if (!processedImage.complete || processedImage.naturalWidth === 0) {
+        return;
+      }
+    }
+    
+    // Create new texture from image (no processing)
+    let clonedTex;
+    try {
+      // Use TextureManager to create texture if available
+      if (textureManager && textureManager.createTextureFromImage) {
+        clonedTex = textureManager.createTextureFromImage(processedImage, {
+          flipY: false
+        });
+      } else {
+        // Fallback: create texture directly (matching working test app settings)
+        clonedTex = new THREE.Texture(processedImage);
+        clonedTex.wrapS = THREE.ClampToEdgeWrapping;    // No horizontal tiling
+        clonedTex.wrapT = THREE.ClampToEdgeWrapping;    // No vertical tiling
+        clonedTex.generateMipmaps = false;               // No mipmap generation (avoids alpha artifacts)
+        clonedTex.minFilter = THREE.LinearFilter;       // Linear filtering
+        clonedTex.magFilter = THREE.LinearFilter;       // Linear filtering
+        clonedTex.colorSpace = THREE.SRGBColorSpace;
+        clonedTex.flipY = false;
+        clonedTex.needsUpdate = true;
+      }
+      
+      // Ensure the image is valid
+      if (!clonedTex || !clonedTex.image) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+
+    // Apply ONLY to map (color/diffuse texture)
+    // finalMat is already the fresh material reference from above
+    finalMat.map = clonedTex;
+    
+    // For metals: Copy brushed metal finish from corresponding metal background mesh
+    if (isMetal && (isFullBleed || isShrunk)) {
+      // Find the corresponding metal background mesh (Metal_Silver_FullBleed/Shrunk or Metal_White_FullBleed/Shrunk)
+      let metalMatForColor = null; // Always from FullBleed for color consistency
+      let metalMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
+      const meshNameLower = (layer.meshName || "").toLowerCase();
+      
+      // First, detect metal type from model meshes (more reliable than materialType)
+      let detectedMetalType = null;
+      model.traverse((obj) => {
+        if (obj.isMesh && obj.name) {
+          const objNameLower = obj.name.toLowerCase();
+          if (objNameLower.includes("silver") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
+            detectedMetalType = "silver";
+          } else if (objNameLower.includes("white") && objNameLower.includes("metal") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
+            detectedMetalType = "white";
+          }
+        }
+      });
+      
+      // Use detected type from model if available, otherwise fall back to materialType
+      const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (materialType === "METAL" || meshNameLower.includes("silver")));
+      const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (materialType === "METAL_BOX" || meshNameLower.includes("white")));
+      
+      console.log(`[Metal PBR] MaterialType: ${materialType}, DetectedMetalType: ${detectedMetalType}, isSilver: ${isSilver}, isWhite: ${isWhite}, meshName: ${layer.meshName}`);
+      
+      model.traverse((obj) => {
+        if (obj.isMesh && obj.material) {
+          const objNameLower = (obj.name || "").toLowerCase();
+          
+          // Always find FullBleed for color (ensures consistency)
+          if (!metalMatForColor) {
+            let shouldMatchFullBleed = false;
+            if (isSilver) {
+              shouldMatchFullBleed = objNameLower.includes("silver") && 
+                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                                     !objNameLower.includes("artwork");
+            } else if (isWhite) {
+              // Match Metal_White_FullBleed - simplified like silver (just check for "white")
+              shouldMatchFullBleed = objNameLower.includes("white") && 
+                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                                     !objNameLower.includes("artwork");
+            }
+            
+            if (shouldMatchFullBleed) {
+              console.log(`[Metal PBR] Potential FullBleed match found: ${obj.name}`);
+              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+              mats.forEach((mat, idx) => {
+                console.log(`[Metal PBR] Checking material ${idx} from ${obj.name}: metalness=${mat.metalness}, hasNormalMap=${!!mat.normalMap}`);
+                if (mat.metalness !== undefined && mat.metalness > 0.4) {
+                  metalMatForColor = mat;
+                  console.log(`[Metal PBR] ✓ Found FullBleed material for color: ${obj.name}, metalness: ${mat.metalness}`);
+                }
+              });
+            }
+          }
+          
+          // Find corresponding mesh for PBR maps (fullBleed or shrunk)
+          if (!metalMatForMaps) {
+            let shouldMatch = false;
+            if (isFullBleed) {
+              if (isSilver) {
+                shouldMatch = objNameLower.includes("silver") && 
+                             (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                             !objNameLower.includes("artwork");
+              } else if (isWhite) {
+                // Match Metal_White_FullBleed - simplified like silver (just check for "white")
+                shouldMatch = objNameLower.includes("white") && 
+                             (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                             !objNameLower.includes("artwork");
+              }
+            } else if (isShrunk) {
+              if (isSilver) {
+                shouldMatch = objNameLower.includes("silver") && 
+                             (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                             !objNameLower.includes("artwork");
+              } else if (isWhite) {
+                // Match Metal_White_Shrunk - simplified like silver (just check for "white")
+                shouldMatch = objNameLower.includes("white") && 
+                             (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                             !objNameLower.includes("artwork");
+              }
+            }
+            
+            if (shouldMatch) {
+              console.log(`[Metal PBR] Potential PBR maps match found: ${obj.name}`);
+              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+              mats.forEach((mat, idx) => {
+                console.log(`[Metal PBR] Checking material ${idx} from ${obj.name}: metalness=${mat.metalness}, hasNormalMap=${!!mat.normalMap}`);
+                if (mat.metalness !== undefined && mat.metalness > 0.4) {
+                  metalMatForMaps = mat;
+                  console.log(`[Metal PBR] ✓ Selected material for PBR maps: ${obj.name}, metalness: ${mat.metalness}`);
+                }
+              });
+            }
+          }
+        }
+      });
+      
+      // Copy brushed metal finish if found
+      if (metalMatForMaps || metalMatForColor) {
+        console.log(`[Metal PBR] Found metal background material for ${layer.meshName}, copying properties...`);
+        console.log(`[Metal PBR] metalMatForMaps: ${metalMatForMaps ? 'found' : 'not found'}, metalMatForColor: ${metalMatForColor ? 'found' : 'not found'}`);
+        
+        // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
+        if (metalMatForMaps) {
+          if (metalMatForMaps.normalMap) {
+            finalMat.normalMap = metalMatForMaps.normalMap;
+            if (finalMat.normalScale && metalMatForMaps.normalScale) {
+              finalMat.normalScale.copy(metalMatForMaps.normalScale);
+            }
+          }
+          if (metalMatForMaps.roughnessMap) {
+            finalMat.roughnessMap = metalMatForMaps.roughnessMap;
+          }
+          if (metalMatForMaps.metalnessMap) {
+            finalMat.metalnessMap = metalMatForMaps.metalnessMap;
+          }
+          if (metalMatForMaps.aoMap) {
+            finalMat.aoMap = metalMatForMaps.aoMap;
+            if (metalMatForMaps.aoMapIntensity !== undefined) {
+              finalMat.aoMapIntensity = metalMatForMaps.aoMapIntensity;
+            }
+          }
+          if (metalMatForMaps.emissiveMap) {
+            finalMat.emissiveMap = metalMatForMaps.emissiveMap;
+          }
+          
+          // Set material properties for metallic brushed finish
+          finalMat.metalness = 1.0; // Make it metallic
+          finalMat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 0.75; // Use frame's roughness (brushed: 0.75)
+          
+          // Copy environment map and intensity for reflections
+          if (metalMatForMaps.envMap) {
+            finalMat.envMap = metalMatForMaps.envMap;
+          }
+          if (metalMatForMaps.envMapIntensity !== undefined) {
+            finalMat.envMapIntensity = metalMatForMaps.envMapIntensity;
+          }
+        }
+        
+        // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
+        if (metalMatForColor && metalMatForColor.color) {
+          finalMat.color.copy(metalMatForColor.color);
+          console.log(`Copied color from FullBleed: r=${metalMatForColor.color.r.toFixed(3)}, g=${metalMatForColor.color.g.toFixed(3)}, b=${metalMatForColor.color.b.toFixed(3)}`);
+        } else if (metalMatForMaps && metalMatForMaps.color) {
+          // Fallback: use color from corresponding mesh if FullBleed not found
+          finalMat.color.copy(metalMatForMaps.color);
+          console.log(`Copied color from corresponding mesh: r=${metalMatForMaps.color.r.toFixed(3)}, g=${metalMatForMaps.color.g.toFixed(3)}, b=${metalMatForMaps.color.b.toFixed(3)}`);
+        }
+      } else {
+        console.warn(`Metal background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+        // Fallback: Set metal properties even if frame material not found
+        finalMat.metalness = 1.0;
+        finalMat.roughness = 0.75; // Default to brushed finish
+      }
+      
+      // Apply minimal transparency settings (matching working test app)
+      finalMat.transparent = true;
+      finalMat.opacity = 1.0;
+      finalMat.alphaTest = 0.001; // Very small alpha test (matches working app)
+      finalMat.depthWrite = true; // Proper depth rendering (matches working app)
+      // Don't set side property - let material use its original setting
+    }
+    
+    // For mirrors: Set artwork layer to matte with minimal reflection (don't copy mirror's reflective properties)
+    if (isMirror && (isFullBleed || isShrunk)) {
+      // Store original material properties BEFORE modifying them (for reset functionality)
+      if (!originalMaterialPropertiesRef.current.has(layerId)) {
+        originalMaterialPropertiesRef.current.set(layerId, {
+          roughness: finalMat.roughness,
+          metalness: finalMat.metalness,
+          envMapIntensity: finalMat.envMapIntensity,
+          transparent: finalMat.transparent,
+          opacity: finalMat.opacity,
+          alphaTest: finalMat.alphaTest,
+          side: finalMat.side,
+          depthWrite: finalMat.depthWrite,
+          normalMap: finalMat.normalMap,
+          roughnessMap: finalMat.roughnessMap,
+          metalnessMap: finalMat.metalnessMap,
+          clearcoatMap: finalMat.clearcoatMap,
+          clearcoatNormalMap: finalMat.clearcoatNormalMap,
+          clearcoatRoughnessMap: finalMat.clearcoatRoughnessMap,
+          sheenColorMap: finalMat.sheenColorMap,
+          sheenRoughnessMap: finalMat.sheenRoughnessMap,
+        });
+      }
+      
+      // Remove any reflection-related maps
+      finalMat.normalMap = null;
+      finalMat.roughnessMap = null;
+      finalMat.metalnessMap = null;
+      finalMat.clearcoatMap = null;
+      finalMat.clearcoatNormalMap = null;
+      finalMat.clearcoatRoughnessMap = null;
+      finalMat.sheenColorMap = null;
+      finalMat.sheenRoughnessMap = null;
+      
+      // Set matte properties: high roughness (matte), low metalness, minimal reflection
+      finalMat.roughness = 0.95; // Very matte (high roughness = less reflective)
+      finalMat.metalness = 0.0; // Non-metallic
+      finalMat.envMapIntensity = 0.1; // Very low environment map intensity (minimal reflection)
+      
+      // Enable transparency for PNG textures (alpha channel support)
+      finalMat.transparent = true;
+      finalMat.opacity = 1.0;
+      finalMat.alphaTest = 0.01; // Small alpha test to help with transparency
+      finalMat.side = THREE.DoubleSide;
+      finalMat.depthWrite = false; // Important for transparency rendering
+      
+      finalMat.needsUpdate = true;
+      console.log(`Set matte properties for mirror artwork layer: "${layer.meshName}" (roughness: ${finalMat.roughness}, envMapIntensity: ${finalMat.envMapIntensity})`);
+    }
+    
+    // For wood: Copy wood texture properties from corresponding wood background mesh
+    if (isWood && (isFullBleed || isShrunk)) {
+      // Find the corresponding wood background mesh (Wood_FullBleed or Wood_Shrunk)
+      let woodMatForColor = null; // Always from FullBleed for color consistency
+      let woodMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
+      
+      model.traverse((obj) => {
+        if (obj.isMesh && obj.material) {
+          const objNameLower = (obj.name || "").toLowerCase();
+          
+          // Always find FullBleed for color (ensures consistency)
+          if (!woodMatForColor) {
+            const shouldMatchFullBleed = objNameLower.includes("wood") && 
+                                        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed"));
+            
+            if (shouldMatchFullBleed) {
+              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+              mats.forEach((mat) => {
+                // Get the wood background material (not artwork material)
+                if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
+                  woodMatForColor = mat;
+                }
+              });
+            }
+          }
+          
+          // Find corresponding mesh for PBR maps (fullBleed or shrunk)
+          if (!woodMatForMaps) {
+            let shouldMatch = false;
+            if (isFullBleed) {
+              shouldMatch = objNameLower.includes("wood") && 
+                           (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                           !objNameLower.includes("artwork");
+            } else if (isShrunk) {
+              shouldMatch = objNameLower.includes("wood") && 
+                           (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                           !objNameLower.includes("artwork");
+            }
+            
+            if (shouldMatch) {
+              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+              mats.forEach((mat) => {
+                // Get the wood background material (not artwork material)
+                if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
+                  woodMatForMaps = mat;
+                }
+              });
+            }
+          }
+        }
+      });
+      
+      // Copy wood texture properties if found
+      if (woodMatForMaps || woodMatForColor) {
+        console.log(`Found wood background material for ${layer.meshName}, copying properties...`);
+        
+        // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
+        if (woodMatForMaps) {
+          if (woodMatForMaps.normalMap) {
+            finalMat.normalMap = woodMatForMaps.normalMap;
+            if (finalMat.normalScale && woodMatForMaps.normalScale) {
+              finalMat.normalScale.copy(woodMatForMaps.normalScale);
+            }
+          }
+          if (woodMatForMaps.roughnessMap) {
+            finalMat.roughnessMap = woodMatForMaps.roughnessMap;
+          }
+          if (woodMatForMaps.metalnessMap) {
+            finalMat.metalnessMap = woodMatForMaps.metalnessMap;
+          }
+          if (woodMatForMaps.aoMap) {
+            finalMat.aoMap = woodMatForMaps.aoMap;
+            if (woodMatForMaps.aoMapIntensity !== undefined) {
+              finalMat.aoMapIntensity = woodMatForMaps.aoMapIntensity;
+            }
+          }
+          if (woodMatForMaps.emissiveMap) {
+            finalMat.emissiveMap = woodMatForMaps.emissiveMap;
+          }
+          
+          // Copy material properties for wood finish
+          if (woodMatForMaps.roughness !== undefined) {
+            finalMat.roughness = woodMatForMaps.roughness;
+          }
+          if (woodMatForMaps.metalness !== undefined) {
+            finalMat.metalness = woodMatForMaps.metalness;
+          }
+          
+          // Copy environment map and intensity for reflections
+          if (woodMatForMaps.envMap) {
+            finalMat.envMap = woodMatForMaps.envMap;
+          }
+          if (woodMatForMaps.envMapIntensity !== undefined) {
+            finalMat.envMapIntensity = woodMatForMaps.envMapIntensity;
+          }
+        }
+        
+        // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
+        if (woodMatForColor && woodMatForColor.color) {
+          finalMat.color.copy(woodMatForColor.color);
+          console.log(`Copied color from Wood_FullBleed: r=${woodMatForColor.color.r.toFixed(3)}, g=${woodMatForColor.color.g.toFixed(3)}, b=${woodMatForColor.color.b.toFixed(3)}`);
+        } else if (woodMatForMaps && woodMatForMaps.color) {
+          // Fallback: use color from corresponding mesh if FullBleed not found
+          finalMat.color.copy(woodMatForMaps.color);
+          console.log(`Copied color from corresponding wood mesh: r=${woodMatForMaps.color.r.toFixed(3)}, g=${woodMatForMaps.color.g.toFixed(3)}, b=${woodMatForMaps.color.b.toFixed(3)}`);
+        }
+      } else {
+        console.warn(`Wood background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+      }
+      
+      // Apply minimal transparency settings (matching working test app, same as metals)
+      finalMat.transparent = true;
+      finalMat.opacity = 1.0;
+      finalMat.alphaTest = 0.001; // Very small alpha test (matches working app)
+      finalMat.depthWrite = true; // Proper depth rendering (matches working app)
+      // Don't set side property - let material use its original setting
+    }
+    
+    // PRESERVE ALL ORIGINAL MATERIAL PROPERTIES
+    // Don't modify transparent, alphaTest, opacity, or color (except for acrylic as above)
+    // Keep all original model material properties intact
+    
+    // Use finalMat (fresh reference) for all updates
+    finalMat.needsUpdate = true;
+
+    // Force material to update all properties
+    if (finalMat.map) {
+      finalMat.map.needsUpdate = true;
+    }
+
+    // Force renderer update if available
+    if (renderer && scene && camera) {
+      try {
+        renderer.render(scene, camera);
+      } catch (e) {
+        // Error rendering scene
+      }
+    }
+
+    // Call callback if provided
+    if (onLayerChange) {
+      try {
+        onLayerChange(layerId, textureNumber, clonedTex);
+      } catch (e) {
+        // Error in onLayerChange callback
+      }
+    }
+  };
+
+  // Reset a layer to its original texture
+  const resetLayerToOriginal = (layerId) => {
+    const layer = textureLayers.find(l => l.id === layerId);
+    if (!layer || !layer.material || !layer.mesh) {
+      return;
+    }
+
+    // Get fresh reference to mesh
+    const mesh = layer.mesh;
+    if (!mesh || !mesh.material) {
+      return;
+    }
+
+    // Get the material
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const mat = mats[layer.materialIndex];
+    if (!mat) {
+      return;
+    }
+
+    const originalTex = originalTexturesRef.current.get(layerId);
+    if (originalTex) {
+      // Restore original texture
+      mat[layer.mapType] = originalTex;
+      
+      // For mirror materials: also restore original material properties
+      const isMirror = materialType === "MIRROR";
+      const isFullBleed = layer.meshType === "fullBleed";
+      const isShrunk = layer.meshType === "shrunk";
+      
+      if (isMirror && (isFullBleed || isShrunk)) {
+        const originalProps = originalMaterialPropertiesRef.current.get(layerId);
+        if (originalProps) {
+          // Restore all material properties
+          if (originalProps.roughness !== undefined) mat.roughness = originalProps.roughness;
+          if (originalProps.metalness !== undefined) mat.metalness = originalProps.metalness;
+          if (originalProps.envMapIntensity !== undefined) mat.envMapIntensity = originalProps.envMapIntensity;
+          if (originalProps.transparent !== undefined) mat.transparent = originalProps.transparent;
+          if (originalProps.opacity !== undefined) mat.opacity = originalProps.opacity;
+          if (originalProps.alphaTest !== undefined) mat.alphaTest = originalProps.alphaTest;
+          if (originalProps.side !== undefined) mat.side = originalProps.side;
+          if (originalProps.depthWrite !== undefined) mat.depthWrite = originalProps.depthWrite;
+          
+          // Restore maps
+          if (originalProps.normalMap !== undefined) mat.normalMap = originalProps.normalMap;
+          if (originalProps.roughnessMap !== undefined) mat.roughnessMap = originalProps.roughnessMap;
+          if (originalProps.metalnessMap !== undefined) mat.metalnessMap = originalProps.metalnessMap;
+          if (originalProps.clearcoatMap !== undefined) mat.clearcoatMap = originalProps.clearcoatMap;
+          if (originalProps.clearcoatNormalMap !== undefined) mat.clearcoatNormalMap = originalProps.clearcoatNormalMap;
+          if (originalProps.clearcoatRoughnessMap !== undefined) mat.clearcoatRoughnessMap = originalProps.clearcoatRoughnessMap;
+          if (originalProps.sheenColorMap !== undefined) mat.sheenColorMap = originalProps.sheenColorMap;
+          if (originalProps.sheenRoughnessMap !== undefined) mat.sheenRoughnessMap = originalProps.sheenRoughnessMap;
+          
+          console.log(`Restored original material properties for mirror artwork layer: "${layer.meshName}"`);
+        }
+      }
+      
+      mat.needsUpdate = true;
+
+      // Force renderer update if available
+      if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+      }
+
+      // Call callback if provided
+      if (onLayerChange) {
+        onLayerChange(layerId, null, originalTex);
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: 10, color: "white", fontSize: 12, ...style }}>
+        Loading texture layers...
+      </div>
+    );
+  }
+
+  if (textureLayers.length === 0) {
+    return (
+      <div style={{ padding: 10, color: "white", fontSize: 12, opacity: 0.7, ...style }}>
+        No texture layers found
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ fontFamily: "monospace", fontSize: 12, ...style }}>
+      {collapsible && (
+        <button
+          onClick={() => setShowLayers(!showLayers)}
+          style={{
+            width: "100%",
+            padding: 10,
+            border: 0,
+            borderRadius: 6,
+            background: showLayers ? "#555" : "#444",
+            color: "white",
+            cursor: "pointer",
+            fontWeight: 700,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>Texture Layers ({textureLayers.length})</span>
+          <span>{showLayers ? "−" : "+"}</span>
+        </button>
+      )}
+
+      {showLayers && (
+        <div style={{ marginTop: collapsible ? 10 : 0, maxHeight: "400px", overflowY: "auto", paddingRight: 4 }}>
+          {textureLayers.map((layer) => (
+            <div
+              key={layer.id}
+              style={{
+                marginBottom: 12,
+                padding: 10,
+                background: "rgba(255,255,255,0.05)",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.1)",
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 11 }}>
+                {layer.mapType}
+              </div>
+              <div style={{ fontSize: 10, opacity: 0.7, marginBottom: 8 }}>
+                Mesh: {layer.meshName || "Unnamed"} • Material: {layer.materialIndex}
+              </div>
+              
+              {/* Texture Controls Section */}
+              {layer.mapType === "map" && (
+                <div style={{ marginBottom: 10, width: "100%", boxSizing: "border-box" }}>
+                  {/* Texture Position Controls */}
+                  <div style={{ marginBottom: 8, padding: 10, background: "rgba(0,0,0,0.25)", borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", width: "100%", boxSizing: "border-box" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 8, color: "#fff", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      Position
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, width: "100%" }}>
+                      <label style={{ fontSize: 9, width: 20, color: "#ccc", fontWeight: 600, flexShrink: 0 }}>X:</label>
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
+                        <input
+                          type="range"
+                          min="-1"
+                          max="1"
+                          step="0.01"
+                          value={textureOffsets.get(layer.id)?.x || 0}
+                          onChange={(e) => {
+                            const newX = parseFloat(e.target.value);
+                            setTextureOffsets(prev => {
+                              const newMap = new Map(prev);
+                              const current = newMap.get(layer.id) || { x: 0, y: 0 };
+                              newMap.set(layer.id, { ...current, x: newX });
+                              return newMap;
+                            });
+                            // Apply offset to texture
+                            const mesh = layer.mesh;
+                            if (mesh && mesh.material) {
+                              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                              const mat = mats[layer.materialIndex];
+                              if (mat && mat.map) {
+                                mat.map.offset.x = newX;
+                                mat.map.needsUpdate = true;
+                                mat.needsUpdate = true;
+                                if (renderer && scene && camera) {
+                                  renderer.render(scene, camera);
+                                }
+                              }
+                            }
+                          }}
+                          style={{ 
+                            width: "100%",
+                            cursor: "pointer",
+                            margin: 0,
+                            padding: 0,
+                            outline: "none",
+                            WebkitAppearance: "none",
+                            appearance: "none",
+                            background: "transparent"
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: 9, width: 40, textAlign: "right", color: "#fff", fontFamily: "monospace", fontWeight: 600, flexShrink: 0 }}>
+                        {(textureOffsets.get(layer.id)?.x || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, width: "100%" }}>
+                      <label style={{ fontSize: 9, width: 20, color: "#ccc", fontWeight: 600, flexShrink: 0 }}>Y:</label>
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
+                        <input
+                          type="range"
+                          min="-1"
+                          max="1"
+                          step="0.01"
+                          value={textureOffsets.get(layer.id)?.y || 0}
+                          onChange={(e) => {
+                            const newY = parseFloat(e.target.value);
+                            setTextureOffsets(prev => {
+                              const newMap = new Map(prev);
+                              const current = newMap.get(layer.id) || { x: 0, y: 0 };
+                              newMap.set(layer.id, { ...current, y: newY });
+                              return newMap;
+                            });
+                            // Apply offset to texture
+                            const mesh = layer.mesh;
+                            if (mesh && mesh.material) {
+                              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                              const mat = mats[layer.materialIndex];
+                              if (mat && mat.map) {
+                                mat.map.offset.y = newY;
+                                mat.map.needsUpdate = true;
+                                mat.needsUpdate = true;
+                                if (renderer && scene && camera) {
+                                  renderer.render(scene, camera);
+                                }
+                              }
+                            }
+                          }}
+                          style={{ 
+                            width: "100%",
+                            cursor: "pointer",
+                            margin: 0,
+                            padding: 0,
+                            outline: "none",
+                            WebkitAppearance: "none",
+                            appearance: "none",
+                            background: "transparent"
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: 9, width: 40, textAlign: "right", color: "#fff", fontFamily: "monospace", fontWeight: 600, flexShrink: 0 }}>
+                        {(textureOffsets.get(layer.id)?.y || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setTextureOffsets(prev => {
+                          const newMap = new Map(prev);
+                          newMap.set(layer.id, { x: 0, y: 0 });
+                          return newMap;
+                        });
+                        // Reset offset
+                        const mesh = layer.mesh;
+                        if (mesh && mesh.material) {
+                          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                          const mat = mats[layer.materialIndex];
+                          if (mat && mat.map) {
+                            mat.map.offset.set(0, 0);
+                            mat.map.needsUpdate = true;
+                            mat.needsUpdate = true;
+                            if (renderer && scene && camera) {
+                              renderer.render(scene, camera);
+                            }
+                          }
+                        }
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "6px",
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        borderRadius: 4,
+                        background: "rgba(255,255,255,0.1)",
+                        color: "#fff",
+                        cursor: "pointer",
+                        fontSize: 9,
+                        fontWeight: 600,
+                        transition: "all 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.target.style.background = "rgba(255,255,255,0.2)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.target.style.background = "rgba(255,255,255,0.1)";
+                      }}
+                    >
+                      Reset Position
+                    </button>
+                  </div>
+                  
+                  {/* Horizontal Scale Controls */}
+                  <div style={{ padding: 10, background: "rgba(0,0,0,0.25)", borderRadius: 5, border: "1px solid rgba(255,255,255,0.1)", width: "100%", boxSizing: "border-box" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 8, color: "#fff", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      Horizontal Scale
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, width: "100%" }}>
+                      <label style={{ fontSize: 9, width: 20, color: "#ccc", fontWeight: 600, flexShrink: 0 }}>X:</label>
+                      <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="3"
+                          step="0.01"
+                          value={textureRepeats.get(layer.id)?.x || 1}
+                          onChange={(e) => {
+                            const newX = parseFloat(e.target.value);
+                            setTextureRepeats(prev => {
+                              const newMap = new Map(prev);
+                              const current = newMap.get(layer.id) || { x: 1, y: 1 };
+                              newMap.set(layer.id, { ...current, x: newX });
+                              return newMap;
+                            });
+                            // Apply repeat to texture - X controls horizontal stretching
+                            const mesh = layer.mesh;
+                            if (mesh && mesh.material) {
+                              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                              const mat = mats[layer.materialIndex];
+                              if (mat && mat.map) {
+                                const currentRepeat = textureRepeats.get(layer.id) || { x: 1, y: 1 };
+                                mat.map.repeat.set(newX, currentRepeat.y);
+                                mat.map.needsUpdate = true;
+                                mat.needsUpdate = true;
+                                if (renderer && scene && camera) {
+                                  renderer.render(scene, camera);
+                                }
+                              }
+                            }
+                          }}
+                          style={{ 
+                            width: "100%",
+                            cursor: "pointer",
+                            margin: 0,
+                            padding: 0,
+                            outline: "none",
+                            WebkitAppearance: "none",
+                            appearance: "none",
+                            background: "transparent"
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: 9, width: 40, textAlign: "right", color: "#fff", fontFamily: "monospace", fontWeight: 600, flexShrink: 0 }}>
+                        {(textureRepeats.get(layer.id)?.x || 1).toFixed(2)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 8, color: "#aaa", marginTop: 4, lineHeight: "1.3" }}>
+                      <span style={{ color: "#4CAF50" }}>Lower</span> = less stretching • <span style={{ color: "#FF9800" }}>Higher</span> = more stretching
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <div style={{ display: "flex", gap: 6 }}>
+                {(() => {
+                  // Filter test textures based on layer type
+                  // Frame_Edge layers ONLY get the frame texture
+                  // Other layers get regular test textures (excluding frame texture)
+                  const isFrameEdge = (layer.meshName || "").includes("Frame_Edge");
+                  const frameTexturePath = MODEL_PATHS?.TEST_IMAGES?.FRAME_TEXTURE;
+                  
+                  // Get available textures for this layer
+                  const availableTextures = testTexturePaths.filter((path, index) => {
+                    // If it's Frame_Edge, ONLY show the frame texture
+                    if (isFrameEdge) return path === frameTexturePath;
+                    // For other layers, exclude the frame texture
+                    return path !== frameTexturePath;
+                  });
+                  
+                  // Map to original indices for proper texture application
+                  return availableTextures.map((path) => {
+                    const originalIndex = testTexturePaths.indexOf(path);
+                    const textureNumber = originalIndex + 1;
+                    const isFrameTexture = path === frameTexturePath;
+                    
+                    return (
+                      <button
+                        key={originalIndex}
+                        onClick={() => applyTestTextureToLayer(layer.id, textureNumber)}
+                        style={{
+                          flex: 1,
+                          padding: 6,
+                          border: 0,
+                          borderRadius: 4,
+                          background: isFrameTexture ? "#9C27B0" : (originalIndex === 0 ? "#4CAF50" : "#2196F3"),
+                          color: "white",
+                          cursor: "pointer",
+                          fontSize: 10,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {isFrameTexture ? "Frame" : `Test ${originalIndex + 1}`}
+                      </button>
+                    );
+                  });
+                })()}
+                <button
+                  onClick={() => resetLayerToOriginal(layer.id)}
+                  style={{
+                    flex: 1,
+                    padding: 6,
+                    border: 0,
+                    borderRadius: 4,
+                    background: "#666",
+                    color: "white",
+                    cursor: "pointer",
+                    fontSize: 10,
+                    fontWeight: 600,
+                  }}
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

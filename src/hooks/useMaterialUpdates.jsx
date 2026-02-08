@@ -1,0 +1,153 @@
+import { useEffect } from "react";
+
+/**
+ * Custom hook to consolidate all material update effects
+ * Handles reflection intensity, metal finish, metal color, material type changes, and environment map toggles
+ */
+export function useMaterialUpdates({
+  modelManagerRef,
+  sceneManagerRef,
+  environmentManagerRef,
+  materialProcessorRef,
+  materialType,
+  lighting,
+  isLoadingRef = null, // Optional ref to track loading state
+}) {
+  // Update reflection intensity - handled by material module (including acrylics)
+  useEffect(() => {
+    const model = modelManagerRef.current?.getModel();
+    if (!model || !materialType.materialModuleRef.current) return;
+
+    const materialModule = materialType.materialModuleRef.current;
+    const activeType = materialType.activeMaterialTypeRef.current;
+    
+    // Update reflection intensity for all material types including acrylics
+    if (materialModule.updateReflectionIntensity) {
+      materialModule.updateReflectionIntensity(
+        model,
+        lighting.reflectionIntensity,
+        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+      );
+      
+      // Force render update
+      const renderer = sceneManagerRef.current?.getRenderer();
+      const scene = sceneManagerRef.current?.getScene();
+      const camera = sceneManagerRef.current?.getCamera();
+      if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+      }
+    }
+  }, [lighting.reflectionIntensity, materialType.materialModuleRef, modelManagerRef, materialProcessorRef, sceneManagerRef]);
+
+  // Update metal finish - handled by material module (only for METAL and METAL_BOX)
+  useEffect(() => {
+    const model = modelManagerRef.current?.getModel();
+    if (!model || !materialType.materialModuleRef.current) return;
+
+    const activeType = materialType.activeMaterialTypeRef.current;
+    if (activeType !== "METAL" && activeType !== "METAL_BOX") {
+      return;
+    }
+
+    const materialModule = materialType.materialModuleRef.current;
+    if (materialModule.updateFinish) {
+      materialModule.updateFinish(model, lighting.metalFinish);
+    }
+  }, [lighting.metalFinish, materialType, modelManagerRef]);
+
+  // Update metal color - handled by material module (only for METAL and METAL_BOX)
+  useEffect(() => {
+    const model = modelManagerRef.current?.getModel();
+    if (!model || !materialType.materialModuleRef.current) return;
+
+    const activeType = materialType.activeMaterialTypeRef.current;
+    if (activeType !== "METAL" && activeType !== "METAL_BOX") {
+      return;
+    }
+
+    const materialModule = materialType.materialModuleRef.current;
+    if (materialModule.updateColor) {
+      materialModule.updateColor(model, materialType.metalColor);
+    }
+  }, [materialType.metalColor, materialType, modelManagerRef]);
+
+  // Re-apply materials when material type changes (skip for acrylics)
+  useEffect(() => {
+    // Skip if model is currently loading
+    if (isLoadingRef?.current) {
+      return;
+    }
+    
+    const model = modelManagerRef.current?.getModel();
+    const renderer = sceneManagerRef.current?.getRenderer();
+    if (!model || !renderer || !materialProcessorRef.current) return;
+
+    const activeMaterialType = materialType.activeMaterialType;
+    materialType.activeMaterialTypeRef.current = activeMaterialType;
+    materialType.setDetectedMaterialType(activeMaterialType);
+
+    // Skip all processing for acrylics - render as-is
+    if (activeMaterialType === "ACRYLIC") {
+      return;
+    }
+
+    // Get material module for this type
+    const materialModule = materialType.getActiveMaterialModule();
+    if (!materialModule) {
+      return;
+    }
+    if (!materialModule.classify || typeof materialModule.classify !== 'function') {
+      return;
+    }
+    materialType.materialModuleRef.current = materialModule;
+    materialProcessorRef.current.setMaterialModule(materialModule);
+
+    // Re-apply materials using MaterialProcessor
+    materialProcessorRef.current.updateMaterialsForType(model, {
+      materialType: activeMaterialType,
+      metalFinish: lighting.metalFinish,
+      metalColor: materialType.metalColor,
+      reflectionIntensity: lighting.reflectionIntensity,
+    });
+
+    // Update environment map for materials
+    const envMap = environmentManagerRef.current?.getEnvironmentMap();
+    if (materialModule.updateMaterials && envMap) {
+      materialModule.updateMaterials(
+        model,
+        envMap,
+        lighting.showReflections,
+        lighting.reflectionIntensity,
+        materialProcessorRef.current.getBaseEnvMapIntensities()
+      );
+    }
+  }, [materialType.selectedMaterialType, materialType.materialTypeOverride, lighting, modelManagerRef, sceneManagerRef, environmentManagerRef, materialProcessorRef, materialType]);
+
+  // Toggle environment map - handled by material module (skip for acrylics)
+  useEffect(() => {
+    const scene = sceneManagerRef.current?.getScene();
+    const envMap = environmentManagerRef.current?.getEnvironmentMap();
+    const model = modelManagerRef.current?.getModel();
+    if (!scene || !envMap || !materialType.materialModuleRef.current) return;
+
+    // Update environment manager
+    environmentManagerRef.current.setEnabled(lighting.showReflections);
+
+    // Update materials using the material module's own update function
+    const materialModule = materialType.materialModuleRef.current;
+    const activeType = materialType.activeMaterialTypeRef.current;
+    
+    // Skip for acrylics - render as-is
+    if (activeType === "ACRYLIC") return;
+    
+    if (materialModule.updateMaterials && model) {
+      materialModule.updateMaterials(
+        model,
+        lighting.showReflections ? envMap : null,
+        lighting.showReflections,
+        lighting.reflectionIntensity,
+        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+      );
+    }
+  }, [lighting.showReflections, lighting.reflectionIntensity, materialType.materialModuleRef, sceneManagerRef, environmentManagerRef, modelManagerRef, materialProcessorRef]);
+}
