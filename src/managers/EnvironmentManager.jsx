@@ -125,51 +125,8 @@ export class EnvironmentManager {
       },
       undefined, // onProgress
       (error) => {
-        // Try fallback path if original path fails (for deployment scenarios)
-        const fallbackPath = path.startsWith('/') ? `.${path}` : path;
-        if (fallbackPath !== path) {
-          console.warn(`HDRI load failed with path "${path}", trying fallback: "${fallbackPath}"`);
-          // Retry with relative path
-          loader.load(
-            fallbackPath,
-            (hdrTex) => {
-              if (!hdrTex || !hdrTex.image) {
-                const errorMsg = `Failed to load HDRI: ${path} (also tried ${fallbackPath}). Please check that the file exists in public/assets/hdr/ and is included in the build.`;
-                if (onError) onError(errorMsg);
-                return;
-              }
-              // Process the successfully loaded texture
-              try {
-                const activePMREM = this.pmremGenerator || pmremGenerator;
-                if (!activePMREM) {
-                  const error = "PMREMGenerator is not available";
-                  if (onError) onError(error);
-                  hdrTex.dispose();
-                  return;
-                }
-                const newEnvMap = activePMREM.fromEquirectangular(hdrTex).texture;
-                if (this.hdrTexture) {
-                  this.hdrTexture.dispose();
-                }
-                hdrTex.dispose();
-                this.setEnvironmentMap(newEnvMap);
-                if (onLoad) onLoad(newEnvMap);
-              } catch (err) {
-                const error = `Failed to process HDRI: ${err.message}`;
-                if (onError) onError(error);
-                hdrTex.dispose();
-              }
-            },
-            undefined,
-            (fallbackError) => {
-              const errorMsg = `Failed to load HDRI: ${path} (also tried ${fallbackPath}). Please check that the file exists in public/assets/hdr/ and is included in the build. For deployment, ensure the public folder is copied correctly.`;
-              if (onError) onError(errorMsg);
-            }
-          );
-        } else {
-          const errorMsg = `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and is included in the build. For deployment, ensure the public folder is copied correctly.`;
-          if (onError) onError(errorMsg);
-        }
+        const errorMsg = `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`;
+        if (onError) onError(errorMsg);
       }
     );
   }
