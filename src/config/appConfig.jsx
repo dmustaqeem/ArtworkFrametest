@@ -17,13 +17,27 @@ export const CURRENT_APP_MODE = APP_MODE.DEMO; // Change to APP_MODE.DEMO for pr
 // =========================
 // MODEL & ASSET PATHS
 // =========================
+// Helper to get base URL for assets (works in both dev and production)
+// For Vite: uses import.meta.env.BASE_URL
+// For other build tools: defaults to "/"
+const getBaseUrl = () => {
+  // Check if we're in a Vite environment
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    return import.meta.env.BASE_URL || '/';
+  }
+  // Fallback for other build tools or direct usage
+  return '/';
+};
+
+const BASE_URL = getBaseUrl();
+
 export const MODEL_PATHS = {
-  GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
-  HDRI: "/assets/hdr/studio3.hdr",
+  GLB: `${BASE_URL}assets/models/Acrylic/Acrylic_450x675.glb`,
+  HDRI: `${BASE_URL}assets/hdr/studio3.hdr`,
   TEST_IMAGES: {
-    IMAGE_1: "/assets/frames/image4.png",
-    IMAGE_2: "/assets/frames/Image5.png",
-    FRAME_TEXTURE: "/assets/frames/1.1.png", // Texture for testing frames
+    IMAGE_1: `${BASE_URL}assets/frames/image4.png`,
+    IMAGE_2: `${BASE_URL}assets/frames/Image5.png`,
+    FRAME_TEXTURE: `${BASE_URL}assets/frames/1.1.png`, // Texture for testing frames
   },
 };
 

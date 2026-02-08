@@ -356,10 +356,21 @@ If you get import errors:
 
 ### HDRI Not Loading
 
-If HDRI doesn't load:
+If HDRI doesn't load (especially after deployment):
+
 1. **Check file exists** - Verify `public/assets/hdr/studio3.hdr` exists
-2. **Update path in config** - Edit `config/appConfig.jsx` and update `MODEL_PATHS.HDRI` if using different location
-3. **Check browser console** - Look for 404 errors or loading failures
+2. **Verify public folder is copied** - Ensure your build process copies the `public` folder to the output directory
+3. **Check deployment base path** - If deployed to a subdirectory (e.g., `/app/`), the path is automatically handled via `import.meta.env.BASE_URL` in Vite
+4. **Update path in config** - Edit `config/appConfig.jsx` and update `MODEL_PATHS.HDRI` if using different location
+5. **Check browser console** - Look for 404 errors or loading failures
+
+**For Vite deployments:**
+- The config automatically uses `import.meta.env.BASE_URL` to handle base paths
+- Ensure `vite.config.js` has `publicDir: 'public'` and `build.copyPublicDir: true`
+
+**For other build tools:**
+- Update `getBaseUrl()` function in `config/appConfig.jsx` to match your build tool's base URL handling
+- Or manually set `BASE_URL` to your deployment base path (e.g., `'/app/'` for subdirectory deployments)
 
 ### Model Not Loading
 
