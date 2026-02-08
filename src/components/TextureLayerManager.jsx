@@ -922,10 +922,32 @@ export default function TextureLayerManager({
     );
   }
 
-  if (textureLayers.length === 0) {
+  // Filter texture layers to only show Artwork_FullBleed, Artwork_Shrunk, and Frame_Edge
+  const filteredTextureLayers = textureLayers.filter((layer) => {
+    const meshName = (layer.meshName || "").toLowerCase();
+    const meshType = layer.meshType;
+    
+    // Show Artwork_FullBleed (by name or type)
+    const isArtworkFullBleed = (meshName.includes("artwork") && 
+                               (meshName.includes("fullbleed") || meshName.includes("full_bleed"))) ||
+                               meshType === "fullBleed";
+    
+    // Show Artwork_Shrunk (by name or type)
+    const isArtworkShrunk = (meshName.includes("artwork") && 
+                           (meshName.includes("shrunk") || meshName.includes("shrink"))) ||
+                           meshType === "shrunk";
+    
+    // Show Frame_Edge (by name or type)
+    const isFrameEdge = (meshName.includes("frame") && meshName.includes("edge")) ||
+                       meshType === "frame";
+    
+    return isArtworkFullBleed || isArtworkShrunk || isFrameEdge;
+  });
+
+  if (filteredTextureLayers.length === 0) {
     return (
       <div style={{ padding: 10, color: "white", fontSize: 12, opacity: 0.7, ...style }}>
-        No texture layers found
+        No texture layers found (Artwork_FullBleed, Artwork_Shrunk, or Frame_Edge)
       </div>
     );
   }
@@ -949,14 +971,14 @@ export default function TextureLayerManager({
             alignItems: "center",
           }}
         >
-          <span>Texture Layers ({textureLayers.length})</span>
+          <span>Texture Layers ({filteredTextureLayers.length})</span>
           <span>{showLayers ? "−" : "+"}</span>
         </button>
       )}
 
       {showLayers && (
         <div style={{ marginTop: collapsible ? 10 : 0, maxHeight: "400px", overflowY: "auto", paddingRight: 4 }}>
-          {textureLayers.map((layer) => (
+          {filteredTextureLayers.map((layer) => (
             <div
               key={layer.id}
               style={{
