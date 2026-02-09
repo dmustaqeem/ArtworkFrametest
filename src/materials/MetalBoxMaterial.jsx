@@ -9,18 +9,18 @@ import { applyPreset } from "./BaseMaterial.jsx";
 export const METAL_BOX_PRESET = {
   PRINT: {
     metalness: 0,
-    roughness: 0.25,
+    roughness: 3.0, // Maximum roughness - no reflections at all
     clearcoat: 0,
     clearcoatRoughness: 0,
-    envBase: 0.9,
-    specularIntensity: 0.12,
+    envBase: 0.0, // Zero reflection intensity for artwork layer
+    specularIntensity: 0.0, // No specular for fully matte finish
     keepMaps: ["map"], // Only keep color map, remove PBR maps
     requiresPhysical: false, // Use StandardMaterial for texture visibility
   },
   METAL: {
     metalness: 1.0,
-    roughness: 0.75, // Default to brushed finish (matte) - will be overridden by finish selection
-    envBase: 0.3, // Low reflection intensity for minimal reflections
+    roughness: 3.0, // Maximum roughness for fully matte finish (no reflections)
+    envBase: 0.0, // Zero reflection intensity - completely disable reflections
     requiresPhysical: false,
   },
   DEFAULT: {
@@ -34,7 +34,7 @@ export const METAL_BOX_PRESET = {
 // Metal finish presets
 export const METAL_FINISH_PRESETS = {
   polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-  brushed: { roughness: 0.75 }, // Very matte, minimal reflections, brushed texture
+  brushed: { roughness: 3.0 }, // Maximum roughness for fully matte finish
 };
 
 /**
@@ -113,8 +113,16 @@ export const updateMetalBoxMaterials = (model, envMap, showReflections, reflecti
         mat.envMap = null; // Use scene.environment
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
-          mat.envMapIntensity = baseIntensity * reflectionIntensity;
+          // Cap reflections to keep it very matte
+          const finalIntensity = Math.min(baseIntensity * reflectionIntensity, 0.05);
+          mat.envMapIntensity = finalIntensity;
         }
+        
+        // Force maximum roughness for ALL materials in metal models - no reflections
+        if (mat.roughness !== undefined) {
+          mat.roughness = 3.0;
+        }
+        
         mat.needsUpdate = true;
       }
     });
@@ -134,9 +142,16 @@ export const updateMetalBoxReflectionIntensity = (model, reflectionIntensity, ba
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
-          mat.envMapIntensity = baseIntensity * reflectionIntensity;
-          mat.needsUpdate = true;
+          // Completely disable reflections for metals - set to zero
+          mat.envMapIntensity = 0.0;
         }
+        
+        // Force maximum roughness for ALL materials in metal models - no reflections
+        if (mat.roughness !== undefined) {
+          mat.roughness = 3.0;
+        }
+        
+        mat.needsUpdate = true;
       }
     });
   });
@@ -150,7 +165,7 @@ export const updateMetalBoxFinish = (model, metalFinish) => {
   
   const METAL_FINISH_PRESETS = {
     polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-    brushed: { roughness: 0.75 }, // Very matte, minimal reflections, brushed texture
+    brushed: { roughness: 3.0 }, // Maximum roughness for fully matte finish
   };
   
   const finishPreset = METAL_FINISH_PRESETS[metalFinish];
@@ -203,7 +218,7 @@ export const updateMetalBoxColor = (model, metalColor) => {
  * Bright lighting for visibility with minimal reflections
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 3.5, // Unified higher exposure default
+  exposure: 2.5, // Standard exposure for metal box (matches other metals)
   ambient: 0.8, // Higher ambient for overall brightness
   key: 2.0, // Stronger key light
   fill: 0.6, // More fill light

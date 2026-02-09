@@ -238,6 +238,37 @@ export class LightingManager {
   }
   
   /**
+   * Set light positions (for material-specific lighting adjustments)
+   * @param {Object} positions - Light positions { key, fill, rim }
+   */
+  setLightPositions(positions) {
+    if (positions.key && this.lights.key) {
+      this.lights.key.position.set(...positions.key);
+    }
+    if (positions.fill && this.lights.fill) {
+      this.lights.fill.position.set(...positions.fill);
+    }
+    if (positions.rim && this.lights.rim) {
+      this.lights.rim.position.set(...positions.rim);
+    }
+  }
+
+  /**
+   * Reset light positions to default
+   */
+  resetLightPositions() {
+    if (this.lights.key) {
+      this.lights.key.position.set(6, 8, 6);
+    }
+    if (this.lights.fill) {
+      this.lights.fill.position.set(-6, 4, -6);
+    }
+    if (this.lights.rim) {
+      this.lights.rim.position.set(-6, 6, -6);
+    }
+  }
+
+  /**
    * Get light references (for external access if needed)
    * @returns {Object} Light objects
    */

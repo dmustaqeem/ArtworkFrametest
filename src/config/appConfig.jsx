@@ -141,13 +141,7 @@ export const UI_CONFIG = {
     },
   },
   background: {
-    gradient: `
-      radial-gradient(1200px 700px at 50% 40%,
-        #f3f3f3 0%,
-        #e3e0de 55%,
-        #d2cdca 100%),
-      linear-gradient(#cfc9c6 0%, #f6f6f6 65%, #ffffff 100%)
-    `,
+    gradient: "#000000", // Black background for both API and demo modes
   },
 };
 
