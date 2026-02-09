@@ -19,9 +19,9 @@ export class LightingManager {
       rim: null,
     };
     
-    // Current lighting state
+    // Current lighting state (global defaults)
     this.lighting = {
-      exposure: 2.0,
+      exposure: 3.5,
       ambient: 0.5,
       key: 1.5,
       fill: 0.25,

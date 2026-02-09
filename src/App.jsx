@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
 import { GlbTextureSwapTester } from './demo/index.jsx';
-import { CURRENT_APP_MODE, APP_MODE } from './config/appConfig.jsx';
+import { CURRENT_APP_MODE, APP_MODE, UI_CONFIG } from './config/appConfig.jsx';
 import './App.css';
 
 function App() {
@@ -167,7 +167,13 @@ function App() {
   }, [artworkUrl, frameUrl]);
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', display: 'flex' }}>
+    <div style={{
+      position: 'relative',
+      width: '100vw',
+      height: '100vh',
+      display: 'flex',
+      background: UI_CONFIG.background.gradient, // Match demo mode background
+    }}>
       {/* Viewer */}
       <div style={{ 
         flex: 1, 

@@ -219,7 +219,7 @@ export const updateMirrorReflectionIntensity = (model, reflectionIntensity, base
  * Default lighting configuration for mirror materials
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.2, // Higher exposure for mirror reflections
+  exposure: 3.5, // Unified higher exposure default
   ambient: 0.4,
   key: 1.8,
   fill: 0.2,

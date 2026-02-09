@@ -12,7 +12,7 @@ export const APP_MODE = {
 };
 
 // Switch between modes here
-export const CURRENT_APP_MODE = APP_MODE.DEMO; // Change to APP_MODE.DEMO for previous mode
+export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO for previous mode
 
 // =========================
 // MODEL & ASSET PATHS

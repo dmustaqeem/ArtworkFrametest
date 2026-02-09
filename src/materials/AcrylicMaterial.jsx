@@ -136,9 +136,9 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     updatedMat.transparent = true;
     updatedMat.opacity = 1.0; // Full opacity, transparency comes from transmission
     
-    // Use brighter color for glass while maintaining transparency
-    // Slightly brighter than before but not pure white to prevent whitish look
-    updatedMat.color.setRGB(0.98, 0.98, 0.98); // Very bright, almost white
+    // Use a neutral, pure white base for glass so it doesn't tint the artwork
+    // This keeps reflections but avoids adding any grey cast to whites behind the acrylic
+    updatedMat.color.setRGB(1.0, 1.0, 1.0);
     
     // Set attenuation for realistic light transmission (neutral white)
     updatedMat.attenuationColor = new THREE.Color(0xffffff);
@@ -183,11 +183,12 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
             (mat.transmission !== undefined && mat.transmission > 0.5);
           
           if (isGlassOrAcrylic) {
-            // Glass/acrylic: use full base intensity for brighter, more reflective appearance
-            mat.envMapIntensity = baseIntensity * 1.0 * reflectionIntensity;
+            // Glass/acrylic: keep strong reflections but slightly reduce intensity
+            // to avoid washing out whites behind the acrylic
+            mat.envMapIntensity = baseIntensity * 0.8 * reflectionIntensity;
           } else {
-            // Print/artwork: reduce intensity to prevent color spillage
-            mat.envMapIntensity = baseIntensity * 0.4 * reflectionIntensity;
+            // Print/artwork: give a bit more environment lift so whites stay punchy
+            mat.envMapIntensity = baseIntensity * 0.6 * reflectionIntensity;
           }
         } else if (mat.envMapIntensity !== undefined) {
           // Fallback: determine based on material properties
@@ -195,9 +196,9 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
             (mat.transmission !== undefined && mat.transmission > 0.5);
           
           if (isGlassOrAcrylic) {
-            mat.envMapIntensity = mat.envMapIntensity * 1.0 * reflectionIntensity;
+            mat.envMapIntensity = mat.envMapIntensity * 0.8 * reflectionIntensity;
           } else {
-            mat.envMapIntensity = mat.envMapIntensity * 0.4 * reflectionIntensity;
+            mat.envMapIntensity = mat.envMapIntensity * 0.6 * reflectionIntensity;
           }
         }
         
@@ -242,11 +243,12 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
         
         if (baseIntensity !== undefined) {
           if (isGlassOrAcrylic) {
-            // Glass/acrylic: use full base intensity for brighter, more reflective appearance
-            mat.envMapIntensity = baseIntensity * 1.0 * reflectionIntensity;
+            // Glass/acrylic: keep strong reflections but slightly reduce intensity
+            // to avoid washing out whites behind the acrylic
+            mat.envMapIntensity = baseIntensity * 0.8 * reflectionIntensity;
           } else {
-            // Print/artwork: reduce intensity to prevent color spillage
-            mat.envMapIntensity = baseIntensity * 0.4 * reflectionIntensity;
+            // Print/artwork: give a bit more environment lift so whites stay punchy
+            mat.envMapIntensity = baseIntensity * 0.6 * reflectionIntensity;
           }
         } else if (mat.envMapIntensity !== undefined) {
           // Fallback: use current intensity
@@ -255,9 +257,9 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
             : mat.envMapIntensity / (0.4 * Math.max(reflectionIntensity, 0.1));
           
           if (isGlassOrAcrylic) {
-            mat.envMapIntensity = currentBase * 1.0 * reflectionIntensity;
+            mat.envMapIntensity = currentBase * 0.8 * reflectionIntensity;
           } else {
-            mat.envMapIntensity = currentBase * 0.4 * reflectionIntensity;
+            mat.envMapIntensity = currentBase * 0.6 * reflectionIntensity;
           }
         }
         
@@ -284,7 +286,7 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
  * Optimized for glossy, glass-like appearance with strong reflections
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.0, // Balanced exposure for glossy materials
+  exposure: 3.5, // Higher default exposure for brighter whites behind acrylic
   ambient: 0.5, // Moderate ambient to allow reflections to show
   key: 1.5, // Strong key light for highlights
   fill: 0.25, // Subtle fill to maintain contrast

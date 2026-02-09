@@ -90,7 +90,7 @@ export const updateDefaultReflectionIntensity = (model, reflectionIntensity, bas
  * Default lighting configuration
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.0,
+  exposure: 3.5,
   ambient: 0.5,
   key: 1.5,
   fill: 0.25,

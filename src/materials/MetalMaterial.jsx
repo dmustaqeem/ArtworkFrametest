@@ -217,7 +217,7 @@ export const updateMetalColor = (model, metalColor) => {
  * Bright lighting for visibility with minimal reflections
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.5, // Higher exposure for brightness
+  exposure: 3.5, // Unified higher exposure default
   ambient: 0.8, // Higher ambient for overall brightness
   key: 2.0, // Stronger key light
   fill: 0.6, // More fill light
