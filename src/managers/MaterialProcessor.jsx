@@ -50,14 +50,12 @@ export class MaterialProcessor {
       }
       
       // Set render order for metals to ensure correct layering
-      if (meshType === "silverFullBleed" || meshType === "whiteMetalFullBleed") {
-        obj.renderOrder = 2; // Highest - always on top
-      } else if (meshType === "fullBleed") {
-        obj.renderOrder = 1; // Below silver/white metal full bleed
-      } else if (meshType === "silverShrunk" || meshType === "whiteMetalShrunk") {
-        obj.renderOrder = 2; // Highest for shrunk mode too
-      } else if (meshType === "shrunk") {
-        obj.renderOrder = 1; // Below silver/white metal shrunk
+      // Artwork layer (fullBleed/shrunk) should be on top, metal background (silverFullBleed/silverShrunk) below
+      if (meshType === "fullBleed" || meshType === "shrunk") {
+        obj.renderOrder = 2; // Artwork layer - render on top
+      } else if (meshType === "silverFullBleed" || meshType === "whiteMetalFullBleed" || 
+                 meshType === "silverShrunk" || meshType === "whiteMetalShrunk") {
+        obj.renderOrder = 1; // Metal background - render below artwork
       } else {
         obj.renderOrder = 0; // Default for frame, back, etc.
       }

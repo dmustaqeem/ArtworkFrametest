@@ -33,6 +33,10 @@ export class TextureManager {
     this.loader.load(
       path,
       (tex) => {
+        // ✅ Set sRGB color space at source to preserve vibrant colors
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.needsUpdate = true;
+        
         this.loadedTextures.set(path, tex);
         if (onLoad) onLoad(tex);
       },

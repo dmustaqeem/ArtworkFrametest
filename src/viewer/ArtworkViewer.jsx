@@ -1,6 +1,6 @@
 import React, { useRef, forwardRef, useEffect } from "react";
 import { useArtworkViewer } from "./useArtworkViewer.jsx";
-import { MODEL_PATHS } from "../config/appConfig.jsx";
+import { MODEL_PATHS, getHDRIPath } from "../config/appConfig.jsx";
 
 /**
  * ArtworkViewer - Plug-and-play Three.js component
@@ -34,7 +34,7 @@ const ArtworkViewer = forwardRef((props, ref) => {
   const {
     // Model & Assets
     modelPath,
-    hdriPath = MODEL_PATHS.HDRI, // Default to HDRI from config
+    hdriPath, // If not provided, will use getHDRIPath based on materialType
     
     // Material Configuration
     materialType = "ACRYLIC",
@@ -81,10 +81,13 @@ const ArtworkViewer = forwardRef((props, ref) => {
   const mountRef = useRef(null);
   const apiRef = useRef(null);
 
+  // Use mirror-specific HDRI for mirrors, otherwise use provided hdriPath or default
+  const finalHdriPath = hdriPath || getHDRIPath(materialType);
+
   const { loading, error } = useArtworkViewer({
     mountRef,
     modelPath,
-    hdriPath,
+    hdriPath: finalHdriPath,
     materialType,
     metalFinish,
     metalColor,

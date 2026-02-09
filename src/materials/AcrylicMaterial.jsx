@@ -11,6 +11,7 @@ export const ACRYLIC_PRESET = {
     // Artwork layer - keep opaque and crisp
     requiresPhysical: false,
     envBase: undefined, // Preserve original envMapIntensity
+    renderOrder: 1, // Render below glass (glass renders on top)
   },
   GLASS: {
     // Premium 5mm acrylic glass - glossy and reflective like glass
@@ -23,6 +24,7 @@ export const ACRYLIC_PRESET = {
     ior: 1.49, // Index of refraction for acrylic (close to glass)
     thickness: 0.005, // 5mm thickness in meters
     envBase: 1.6, // Increased reflection intensity for brighter appearance
+    renderOrder: 2, // Render on top of artwork (PRINT layer)
   },
   ACRYLIC: {
     // Acrylic material - similar to glass but slightly less transparent
@@ -35,6 +37,7 @@ export const ACRYLIC_PRESET = {
     ior: 1.49, // Index of refraction for acrylic
     thickness: 0.005, // 5mm thickness
     envBase: 1.6, // Increased reflection intensity for brighter appearance
+    renderOrder: 2, // Render on top of artwork (PRINT layer)
   },
   DEFAULT: {
     // Default acrylic-like properties
@@ -104,8 +107,12 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
   
   // For PRINT role (artwork layer), ensure texture is visible
   if (role === "PRINT") {
-    // Ensure opaque and no transmission
-    updatedMat.transparent = false;
+    // Enable tone mapping so exposure affects brightness
+    // This allows the exposure slider to brighten the artwork
+    updatedMat.toneMapped = true;
+    
+    // Ensure transparent for PNG alpha support
+    updatedMat.transparent = true;
     updatedMat.opacity = 1.0;
     
     // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
@@ -286,7 +293,7 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
  * Optimized for glossy, glass-like appearance with strong reflections
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 3.5, // Higher default exposure for brighter whites behind acrylic
+  exposure: 1.8, // Higher default exposure for brighter whites behind acrylic
   ambient: 0.5, // Moderate ambient to allow reflections to show
   key: 1.5, // Strong key light for highlights
   fill: 0.25, // Subtle fill to maintain contrast

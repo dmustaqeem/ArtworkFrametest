@@ -10,7 +10,7 @@ import {
   createMeshVisibilityManager,
   createMaterialProcessor,
 } from "../managers/index.jsx";
-import { MODEL_PATHS, SCENE_CONFIG } from "../config/appConfig.jsx";
+import { MODEL_PATHS, SCENE_CONFIG, getHDRIPath } from "../config/appConfig.jsx";
 
 /**
  * Custom hook to handle app initialization
@@ -88,9 +88,11 @@ function useAppInitialization({
     const meshVisibilityManager = createMeshVisibilityManager();
     meshVisibilityManagerRef.current = meshVisibilityManager;
 
-    // Load HDRI environment map
+    // Load HDRI environment map (use mirror-specific HDRI for mirrors)
+    const activeMaterialType = materialType.activeMaterialType;
+    const hdriPath = getHDRIPath(activeMaterialType);
     environmentManager.loadHDRI(
-      MODEL_PATHS.HDRI,
+      hdriPath,
       (newEnvMap) => {
         // Update materials immediately when HDRI loads
         const model = modelManager.getModel();
@@ -111,7 +113,6 @@ function useAppInitialization({
     );
 
     // Load GLB model
-    const activeMaterialType = materialType.activeMaterialType;
     materialType.activeMaterialTypeRef.current = activeMaterialType;
     materialType.setDetectedMaterialType(activeMaterialType);
 

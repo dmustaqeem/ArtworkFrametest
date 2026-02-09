@@ -8,7 +8,7 @@ import { createMeshVisibilityManager } from "../managers/MeshVisibilityManager.j
 import { createMaterialProcessor } from "../managers/MaterialProcessor.jsx";
 import { createLightingManager } from "../lighting/index.jsx";
 import { getMaterialModule, registerMaterialLightingDefaults } from "../materials/index.js";
-import { MODEL_PATHS, SCENE_CONFIG, MATERIAL_CONFIG } from "../config/appConfig.jsx";
+import { MODEL_PATHS, SCENE_CONFIG, MATERIAL_CONFIG, getHDRIPath } from "../config/appConfig.jsx";
 
 /**
  * Custom hook to initialize and manage Three.js scene and all managers
@@ -109,9 +109,11 @@ export function useThreeScene(
     const meshVisibilityManager = createMeshVisibilityManager();
     meshVisibilityManagerRef.current = meshVisibilityManager;
 
-    // Load HDRI environment map
+    // Load HDRI environment map (use mirror-specific HDRI for mirrors)
+    const activeMaterialType = materialType || MATERIAL_CONFIG.DEFAULT_TYPE;
+    const hdriPath = getHDRIPath(activeMaterialType);
     environmentManager.loadHDRI(
-      MODEL_PATHS.HDRI,
+      hdriPath,
       (newEnvMap) => {
         // Update materials immediately when HDRI loads
         const model = modelManager.getModel();
@@ -132,7 +134,6 @@ export function useThreeScene(
     );
 
     // Get material module for this type
-    const activeMaterialType = materialType || MATERIAL_CONFIG.DEFAULT_TYPE;
     activeMaterialTypeRef.current = activeMaterialType;
 
     const materialModule = getMaterialModule(activeMaterialType);

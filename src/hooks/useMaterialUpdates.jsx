@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { getHDRIPath } from "../config/appConfig.jsx";
 
 /**
  * Custom hook to consolidate all material update effects
@@ -13,6 +14,8 @@ export function useMaterialUpdates({
   lighting,
   isLoadingRef = null, // Optional ref to track loading state
 }) {
+  // Track previous material type to detect MIRROR changes
+  const previousMaterialTypeRef = useRef(materialType.activeMaterialType);
   // Update reflection intensity - handled by material module (including acrylics)
   useEffect(() => {
     const model = modelManagerRef.current?.getModel();
@@ -70,6 +73,43 @@ export function useMaterialUpdates({
       materialModule.updateColor(model, materialType.metalColor);
     }
   }, [materialType.metalColor, materialType, modelManagerRef]);
+
+  // Reload HDRI when switching to/from MIRROR material type
+  useEffect(() => {
+    const activeMaterialType = materialType.activeMaterialType;
+    const previousType = previousMaterialTypeRef.current;
+    
+    // Check if switching to/from MIRROR
+    const isSwitchingToMirror = activeMaterialType === "MIRROR" && previousType !== "MIRROR";
+    const isSwitchingFromMirror = activeMaterialType !== "MIRROR" && previousType === "MIRROR";
+    
+    if ((isSwitchingToMirror || isSwitchingFromMirror) && environmentManagerRef.current) {
+      const hdriPath = getHDRIPath(activeMaterialType);
+      const model = modelManagerRef.current?.getModel();
+      
+      environmentManagerRef.current.loadHDRI(
+        hdriPath,
+        (newEnvMap) => {
+          // Update materials with new environment map
+          if (model && materialType.materialModuleRef.current?.updateMaterials) {
+            materialType.materialModuleRef.current.updateMaterials(
+              model,
+              newEnvMap,
+              lighting.showReflections,
+              lighting.reflectionIntensity,
+              materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+            );
+          }
+        },
+        (error) => {
+          console.error("Failed to load HDRI for material type:", error);
+        }
+      );
+    }
+    
+    // Update previous material type
+    previousMaterialTypeRef.current = activeMaterialType;
+  }, [materialType.activeMaterialType, environmentManagerRef, materialType, lighting, modelManagerRef, materialProcessorRef]);
 
   // Re-apply materials when material type changes (skip for acrylics)
   useEffect(() => {
@@ -150,4 +190,25 @@ export function useMaterialUpdates({
       );
     }
   }, [lighting.showReflections, lighting.reflectionIntensity, materialType.materialModuleRef, sceneManagerRef, environmentManagerRef, modelManagerRef, materialProcessorRef]);
+
+  // Update acrylic exposure (makes emissive intensity respond to renderer exposure)
+  useEffect(() => {
+    const model = modelManagerRef.current?.getModel();
+    const renderer = sceneManagerRef.current?.getRenderer();
+    if (!model || !renderer) return;
+
+    const activeType = materialType.activeMaterialTypeRef.current;
+    
+    // Only update exposure for acrylic materials
+    if (activeType === "ACRYLIC" && materialType.materialModuleRef.current?.updateExposure) {
+      materialType.materialModuleRef.current.updateExposure(model, renderer);
+      
+      // Force render update
+      const scene = sceneManagerRef.current?.getScene();
+      const camera = sceneManagerRef.current?.getCamera();
+      if (scene && camera) {
+        renderer.render(scene, camera);
+      }
+    }
+  }, [lighting.exposure, materialType.materialModuleRef, modelManagerRef, sceneManagerRef]);
 }

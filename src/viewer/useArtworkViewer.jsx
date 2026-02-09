@@ -734,8 +734,31 @@ export function useArtworkViewer({
                                    (layer.meshName.toLowerCase().includes("fullbleed") || layer.meshName.toLowerCase().includes("full_bleed"));
             const isFullBleedMesh = isArtworkFullBleed || isWoodFullBleed;
             
-            // No image processing applied
+            // For acrylic: Composite white base with artwork texture
             let processedImage = texture.image;
+            
+            if (isAcrylic && (isFullBleed || isShrunk)) {
+              // Create a composite texture with white base and artwork on top
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              
+              // Get image dimensions
+              const img = texture.image;
+              const width = img.width || img.naturalWidth || 2048;
+              const height = img.height || img.naturalHeight || 2048;
+              
+              canvas.width = width;
+              canvas.height = height;
+              
+              // Draw white background first
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(0, 0, width, height);
+              
+              // Draw artwork texture on top (preserving alpha)
+              ctx.drawImage(img, 0, 0, width, height);
+              
+              processedImage = canvas;
+            }
             
             // For wood: Copy wood texture properties from corresponding wood background mesh
             if (isWood && (isFullBleed || isShrunk)) {

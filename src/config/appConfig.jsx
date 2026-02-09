@@ -20,11 +20,21 @@ export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO fo
 export const MODEL_PATHS = {
   GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
   HDRI: "/assets/hdr/studio.hdr",
+  HDRI_MIRROR: "/assets/hdr/studio2.hdr", // Special HDRI for mirror materials
   TEST_IMAGES: {
     IMAGE_1: "/assets/frames/image4.png",
     IMAGE_2: "/assets/frames/Image5.png",
     FRAME_TEXTURE: "/assets/frames/1.1.png", // Texture for testing frames
   },
+};
+
+/**
+ * Get HDRI path based on material type
+ * @param {string} materialType - Material type
+ * @returns {string} HDRI path
+ */
+export const getHDRIPath = (materialType) => {
+  return materialType === "MIRROR" ? MODEL_PATHS.HDRI_MIRROR : MODEL_PATHS.HDRI;
 };
 
 // =========================
@@ -141,7 +151,7 @@ export const UI_CONFIG = {
     },
   },
   background: {
-    gradient: "#000000", // Black background for both API and demo modes
+    gradient: "#333333", // Dark grey background for both API and demo modes
   },
 };
 

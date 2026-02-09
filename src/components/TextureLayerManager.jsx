@@ -402,8 +402,31 @@ export default function TextureLayerManager({
       return;
     }
     
-    // No image processing applied
+    // For acrylic: Composite white base with artwork texture
     let processedImage = sourceImage;
+    
+    if (isAcrylic && (isFullBleed || isShrunk)) {
+      // Create a composite texture with white base and artwork on top
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Get image dimensions
+      const img = sourceImage;
+      const width = img.width || img.naturalWidth || (img instanceof HTMLCanvasElement ? img.width : 2048);
+      const height = img.height || img.naturalHeight || (img instanceof HTMLCanvasElement ? img.height : 2048);
+      
+      canvas.width = width;
+      canvas.height = height;
+      
+      // Draw white background first
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, width, height);
+      
+      // Draw artwork texture on top (preserving alpha)
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      processedImage = canvas;
+    }
     
     // Dispose old texture to prevent remnants (but only if it's not the original)
     const originalTex = originalTexturesRef.current.get(layerId);

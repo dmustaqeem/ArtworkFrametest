@@ -16,12 +16,14 @@ export const METAL_BOX_PRESET = {
     specularIntensity: 0.0, // No specular for fully matte finish
     keepMaps: ["map"], // Only keep color map, remove PBR maps
     requiresPhysical: false, // Use StandardMaterial for texture visibility
+    renderOrder: 2, // Render on top of metal background (WhiteMetal_FullBleed/Shrunk)
   },
   METAL: {
     metalness: 1.0,
     roughness: 3.0, // Maximum roughness for fully matte finish (no reflections)
     envBase: 0.0, // Zero reflection intensity - completely disable reflections
     requiresPhysical: false,
+    renderOrder: 1, // Render below artwork (PRINT layer)
   },
   DEFAULT: {
     metalness: 0,
@@ -79,9 +81,13 @@ export const applyMetalBoxPreset = (material, preset, renderer, role, options = 
   
   // For PRINT role (artwork layer), ensure texture is visible
   if (role === "PRINT") {
-    // Ensure opaque and no transmission
-    updatedMat.transparent = false;
+    // Enable tone mapping so exposure affects brightness (same clarity as acrylics)
+    updatedMat.toneMapped = true;
+    
+    // Ensure transparent for PNG alpha support
+    updatedMat.transparent = true;
     updatedMat.opacity = 1.0;
+    updatedMat.alphaTest = 0.001; // Very small alpha test to help with transparency
     
     // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
     if (updatedMat.isMeshPhysicalMaterial) {
@@ -93,6 +99,11 @@ export const applyMetalBoxPreset = (material, preset, renderer, role, options = 
     // CRITICAL: Ensure texture map is visible and properly configured
     if (updatedMat.map) {
       updatedMat.map.needsUpdate = true;
+    }
+    
+    // Ensure white base color for artwork (but NO white base texture compositing - unlike acrylics)
+    if (updatedMat.color) {
+      updatedMat.color.set(0xffffff);
     }
   }
   
@@ -218,7 +229,7 @@ export const updateMetalBoxColor = (model, metalColor) => {
  * Bright lighting for visibility with minimal reflections
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.5, // Standard exposure for metal box (matches other metals)
+  exposure: 2.0, // Standard exposure for metal box (matches other metals)
   ambient: 0.8, // Higher ambient for overall brightness
   key: 2.0, // Stronger key light
   fill: 0.6, // More fill light

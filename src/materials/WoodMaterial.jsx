@@ -185,7 +185,7 @@ export const updateWoodReflectionIntensity = (model, reflectionIntensity, baseEn
  * Default lighting configuration for wood materials
  */
 export const DEFAULT_LIGHTING = {
-  exposure: 2.2,
+  exposure: 1.5,
   ambient: 0.6, // Slightly higher for natural wood warmth
   key: 1.4,
   fill: 0.3,
