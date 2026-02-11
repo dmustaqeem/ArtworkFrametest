@@ -63,26 +63,6 @@ export class EnvironmentManager {
       return;
     }
     
-    // Pre-check: Verify file is accessible (helps with deployment issues)
-    fetch(path, { method: 'HEAD' })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        // File is accessible, proceed with loading
-        this._loadHDRIFile(path, pmremGenerator, renderer, onLoad, onError);
-      })
-      .catch((fetchError) => {
-        // If HEAD request fails, still try to load (might be CORS or other issue)
-        console.warn('HDRI pre-check failed, attempting to load anyway:', fetchError);
-        this._loadHDRIFile(path, pmremGenerator, renderer, onLoad, onError);
-      });
-  }
-
-  /**
-   * Internal method to actually load the HDRI file
-   */
-  _loadHDRIFile(path, pmremGenerator, renderer, onLoad, onError) {
     const loader = new RGBELoader().setDataType(THREE.HalfFloatType);
     
     loader.load(
@@ -145,19 +125,7 @@ export class EnvironmentManager {
       },
       undefined, // onProgress
       (error) => {
-        // Log detailed error for debugging
-        console.error('HDRI Load Error:', {
-          path,
-          error: error?.message || error,
-          url: window.location.href,
-          isProduction: import.meta.env.PROD,
-          fullError: error
-        });
-        
-        const isDev = import.meta.env.DEV;
-        const errorMsg = isDev
-          ? `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`
-          : `Failed to load HDRI: ${path}. Please check that the file exists and is properly deployed. Error: ${error?.message || error}. If the file is in git, ensure Vercel is building with the correct configuration.`;
+        const errorMsg = `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`;
         if (onError) onError(errorMsg);
       }
     );

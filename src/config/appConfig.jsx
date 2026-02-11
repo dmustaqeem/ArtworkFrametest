@@ -17,27 +17,10 @@ export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO fo
 // =========================
 // MODEL & ASSET PATHS
 // =========================
-// HDRI Configuration:
-// - If Vercel returns 404 for HDR files, use external URLs via environment variables
-// - Set VITE_HDRI_URL and VITE_HDRI_MIRROR_URL in Vercel environment variables
-// - Or host files on CDN/S3 and update URLs below
-// - Example: VITE_HDRI_URL=https://your-cdn.com/assets/hdr/studio3.hdr
-
-const getHDRIUrl = (defaultPath, envVar) => {
-  // Check for environment variable first (for external hosting)
-  if (import.meta.env[envVar]) {
-    return import.meta.env[envVar];
-  }
-  // Fall back to local path
-  return defaultPath;
-};
-
 export const MODEL_PATHS = {
   GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
-  // HDRI paths - supports environment variables for external hosting
-  // Set VITE_HDRI_URL and VITE_HDRI_MIRROR_URL in Vercel to use external URLs
-  HDRI: getHDRIUrl("/assets/hdr/studio3.hdr", "VITE_HDRI_URL"),
-  HDRI_MIRROR: getHDRIUrl("/assets/hdr/studio2.hdr", "VITE_HDRI_MIRROR_URL"),
+  HDRI: "/assets/hdr/studio1.hdr",
+  HDRI_MIRROR: "/assets/hdr/studio2.hdr", // Special HDRI for mirror materials
   TEST_IMAGES: {
     IMAGE_1: "/assets/frames/image4.png",
     IMAGE_2: "/assets/frames/Image5.png",

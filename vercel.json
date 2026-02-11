@@ -7,7 +7,7 @@
       "headers": [
         {
           "key": "Content-Type",
-          "value": "image/vnd.radiance"
+          "value": "application/octet-stream"
         },
         {
           "key": "Cache-Control",
