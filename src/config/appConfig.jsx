@@ -19,7 +19,7 @@ export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO fo
 // =========================
 export const MODEL_PATHS = {
   GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
-  HDRI: "/assets/hdr/studio.hdr",
+  HDRI: "/assets/hdr/studio3.hdr",
   HDRI_MIRROR: "/assets/hdr/studio2.hdr", // Special HDRI for mirror materials
   TEST_IMAGES: {
     IMAGE_1: "/assets/frames/image4.png",
@@ -61,6 +61,9 @@ export const DEFAULT_LIGHTING = {
   key: 1.50,
   fill: 0.25,
   rim: 0.35,
+  // Optional acrylic-only control: base brightness for super-white backing
+  // Using 1.5 for more emissive white appearance (emissiveIntensity, range 0.5-3.0)
+  acrylicBase: 1.5,
 };
 
 // =========================
@@ -68,7 +71,7 @@ export const DEFAULT_LIGHTING = {
 // =========================
 export const DEFAULT_STATE = {
   envRotation: 0,
-  reflectionIntensity: 1.0,
+  reflectionIntensity: 0.2,
   metalFinish: "brushed", // Default to brushed for brushed silver metal
   showReflections: true,
   showLightingControls: false,
@@ -161,7 +164,7 @@ export const UI_CONFIG = {
 export const LIGHTING_CONTROLS = [
   {
     key: "exposure",
-    label: "Exposure",
+    label: " ",
     min: 0.5,
     max: 2.0,
     step: 0.01,

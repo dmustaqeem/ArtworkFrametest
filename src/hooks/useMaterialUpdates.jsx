@@ -23,24 +23,32 @@ export function useMaterialUpdates({
 
     const materialModule = materialType.materialModuleRef.current;
     const activeType = materialType.activeMaterialTypeRef.current;
+    const envMap = environmentManagerRef.current?.getEnvironmentMap();
     
-    // Update reflection intensity for all material types including acrylics
-    if (materialModule.updateReflectionIntensity) {
+    // For acrylics: apply matte to artwork, glossy to glass when reflection intensity changes
+    if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy && envMap) {
+      materialModule.applyArtworkMatteGlassGlossy(
+        model,
+        envMap,
+        lighting.reflectionIntensity
+      );
+    } else if (materialModule.updateReflectionIntensity) {
+      // Update reflection intensity for other material types
       materialModule.updateReflectionIntensity(
         model,
         lighting.reflectionIntensity,
         materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
       );
-      
-      // Force render update
-      const renderer = sceneManagerRef.current?.getRenderer();
-      const scene = sceneManagerRef.current?.getScene();
-      const camera = sceneManagerRef.current?.getCamera();
-      if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-      }
     }
-  }, [lighting.reflectionIntensity, materialType.materialModuleRef, modelManagerRef, materialProcessorRef, sceneManagerRef]);
+    
+    // Force render update
+    const renderer = sceneManagerRef.current?.getRenderer();
+    const scene = sceneManagerRef.current?.getScene();
+    const camera = sceneManagerRef.current?.getCamera();
+    if (renderer && scene && camera) {
+      renderer.render(scene, camera);
+    }
+  }, [lighting.reflectionIntensity, materialType.materialModuleRef, modelManagerRef, materialProcessorRef, sceneManagerRef, environmentManagerRef]);
 
   // Update metal finish - handled by material module (only for METAL and METAL_BOX)
   useEffect(() => {

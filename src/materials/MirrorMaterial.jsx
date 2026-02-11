@@ -37,7 +37,7 @@ export const MIRROR_PRESET = {
 export const classifyMaterial = ({ meshName, material, materialType }) => {
   const matName = (material?.name || "").toLowerCase();
   const meshNameLower = (meshName || "").toLowerCase();
-  
+
   // MIRROR: Check for mirror indicators
   if (
     materialType === "MIRROR" ||
@@ -46,13 +46,13 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
   ) {
     return "MIRROR";
   }
-  
+
   // PRINT: Has color map (but mirror shines through)
   const hasArtworkMap = !!material?.map;
   if (hasArtworkMap) {
     return "PRINT";
   }
-  
+
   return "DEFAULT";
 };
 
@@ -68,31 +68,31 @@ export const applyMirrorPreset = (material, preset, renderer, role, options = {}
   // Use BaseMaterial's applyPreset to handle material upgrades and properties
   // BaseMaterial will handle downgrading PhysicalMaterial to StandardMaterial for PRINT if needed
   const updatedMat = applyPreset(material, preset, renderer, role, options);
-  
+
   // For PRINT role (artwork layer), ensure texture is visible
   if (role === "PRINT") {
     // Ensure opaque and no transmission
     updatedMat.transparent = false;
     updatedMat.opacity = 1.0;
-    
+
     // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
     if (updatedMat.isMeshPhysicalMaterial) {
       updatedMat.transmission = 0;
       updatedMat.thickness = 0;
       updatedMat.ior = 1.0;
     }
-    
+
     // CRITICAL: Ensure texture map is visible and properly configured
     if (updatedMat.map) {
       updatedMat.map.needsUpdate = true;
     }
-    
+
     // Ensure white base color for artwork (BaseMaterial already does this, but ensure it)
     if (updatedMat.color) {
       updatedMat.color.set(0xffffff);
     }
   }
-  
+
   return updatedMat;
 };
 
@@ -107,37 +107,50 @@ export const applyMirrorPreset = (material, preset, renderer, role, options = {}
  */
 export const isArtworkLayer = (obj, mat) => {
   if (!obj || !mat) return false;
-  
+
   const meshName = (obj.name || "").toLowerCase();
   const originalName = obj.name || "";
-  
+
   // PRIMARY CHECK: Always skip artwork meshes by name (most reliable)
   // This catches Artwork_FullBleed, Artwork_Shrunk, etc. regardless of their current material properties
   // Check for exact matches first, then variations
-  const isArtworkMesh = (meshName.includes("artwork") || meshName.includes("art_work")) && 
-                        (meshName.includes("fullbleed") || meshName.includes("full_bleed") || 
-                         meshName.includes("shrunk") || meshName.includes("shrink"));
-  
+  const isArtworkMesh = (meshName.includes("artwork") || meshName.includes("art_work")) &&
+    (meshName.includes("fullbleed") || meshName.includes("full_bleed") ||
+      meshName.includes("shrunk") || meshName.includes("shrink"));
+
   if (isArtworkMesh) {
     // CRITICAL: Always skip artwork meshes - they should NEVER be updated by updateMirrorMaterials
     // This prevents them from being overwritten when UI controls trigger re-renders or material updates
     return true;
   }
-  
+
   // FALLBACK CHECK: Check if material has matte properties (indicating it's an artwork layer with texture applied)
   // This catches cases where mesh name might not match exactly, but material has been set to matte
   // Only use this as fallback - the name check should catch 99% of cases
-  const hasMatteProperties = mat.roughness !== undefined && mat.roughness > 0.9 && 
-                             mat.envMapIntensity !== undefined && mat.envMapIntensity < 0.2 && 
-                             mat.metalness !== undefined && mat.metalness < 0.1;
-  
+  const hasMatteProperties = mat.roughness !== undefined && mat.roughness > 0.9 &&
+    mat.envMapIntensity !== undefined && mat.envMapIntensity < 0.2 &&
+    mat.metalness !== undefined && mat.metalness < 0.1;
+
   if (hasMatteProperties) {
     // Debug: Uncomment to verify fallback check is working
     // console.log(`[MirrorMaterial] SKIPPING by matte properties: ${originalName} (roughness: ${mat.roughness}, envMapIntensity: ${mat.envMapIntensity})`);
     return true;
   }
-  
+
   return false;
+};
+
+/**
+ * Helper to detect mirror back layer meshes (e.g. Mirror_Back) that should be matte
+ * and non‑reflective, even in MIRROR mode.
+ */
+const isMirrorBackLayer = (obj) => {
+  if (!obj || !obj.name) return false;
+  const meshName = obj.name.toLowerCase();
+  return (
+    meshName === "mirror_back" ||
+    (meshName.includes("mirror") && meshName.includes("back"))
+  );
 };
 
 /**
@@ -146,33 +159,61 @@ export const isArtworkLayer = (obj, mat) => {
  */
 export const updateMirrorMaterials = (model, envMap, showReflections, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
-  
+
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
-    
+
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        // Mirror back: force matte, non‑reflective surface
+        if (isMirrorBackLayer(obj)) {
+          // Bright RGB like mirror back (but keep tone mapping enabled to prevent blowout)
+          if (mat.color) {
+            mat.color.setRGB(3.0, 3.0, 3.0); // Bright like mirror back
+          }
+          if ("metalness" in mat) mat.metalness = 0.0;
+          // Keep mostly matte, but not chalk-flat
+          if ("roughness" in mat) mat.roughness = 0.8;
+          if ("envMapIntensity" in mat) mat.envMapIntensity = 0.0;
+          mat.envMap = null;
+          if ("clearcoat" in mat) mat.clearcoat = 0.0;
+          if ("clearcoatRoughness" in mat) mat.clearcoatRoughness = 1.0;
+          if ("specularIntensity" in mat) mat.specularIntensity = 0.0;
+          
+          // CRITICAL: Keep tone mapping enabled - prevents blowout
+          mat.toneMapped = true;
+          
+          // Remove emissive (mirror back doesn't use emissive, uses bright RGB instead)
+          if (mat.emissive) {
+            mat.emissive.set(0x000000);
+            mat.emissiveIntensity = 0.0;
+          }
+          
+          mat.needsUpdate = true;
+          return;
+        }
+
         // SKIP artwork layers - they maintain their own matte properties
         // This is CRITICAL - artwork layers should NEVER be updated by this function
         if (isArtworkLayer(obj, mat)) {
           return; // Skip this material, preserve its properties
         }
-        
+
         mat.envMap = null; // Use scene.environment
-        
+
         // Update envMapIntensity based on base intensity and reflection intensity
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
           mat.envMapIntensity = baseIntensity * reflectionIntensity;
         }
-        
+
         // Use normal white color for mirrors (no golden tint)
         // Only apply color if no texture map is present (to preserve texture colors)
         if (mat.color && !mat.map) {
           mat.color.set(0xffffff);
         }
-        
+
         mat.needsUpdate = true;
       }
     });
@@ -185,30 +226,57 @@ export const updateMirrorMaterials = (model, envMap, showReflections, reflection
  */
 export const updateMirrorReflectionIntensity = (model, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
-  
+
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
-    
+
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        // Mirror back: keep matte / non‑reflective regardless of reflectionIntensity
+        if (isMirrorBackLayer(obj)) {
+          // Bright RGB like mirror back (but keep tone mapping enabled to prevent blowout)
+          if (mat.color) {
+            mat.color.setRGB(3.0, 3.0, 3.0); // Bright like mirror back
+          }
+          if ("metalness" in mat) mat.metalness = 0.0;
+          if ("roughness" in mat) mat.roughness = 0.8;
+          if ("envMapIntensity" in mat) mat.envMapIntensity = 0.0;
+          mat.envMap = null;
+          if ("clearcoat" in mat) mat.clearcoat = 0.0;
+          if ("clearcoatRoughness" in mat) mat.clearcoatRoughness = 1.0;
+          if ("specularIntensity" in mat) mat.specularIntensity = 0.0;
+          
+          // CRITICAL: Keep tone mapping enabled - prevents blowout
+          mat.toneMapped = true;
+          
+          // Remove emissive (mirror back doesn't use emissive, uses bright RGB instead)
+          if (mat.emissive) {
+            mat.emissive.set(0x000000);
+            mat.emissiveIntensity = 0.0;
+          }
+          
+          mat.needsUpdate = true;
+          return;
+        }
+
         // SKIP artwork layers - they maintain their own matte properties
         if (isArtworkLayer(obj, mat)) {
           return; // Skip this material, preserve its properties
         }
-        
+
         // Update envMapIntensity based on base intensity and reflection intensity
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
           mat.envMapIntensity = baseIntensity * reflectionIntensity;
         }
-        
+
         // Use normal white color for mirrors (no golden tint)
         // Only apply color if no texture map is present (to preserve texture colors)
         if (mat.color && !mat.map) {
           mat.color.set(0xffffff);
         }
-        
+
         mat.needsUpdate = true;
       }
     });
@@ -220,7 +288,7 @@ export const updateMirrorReflectionIntensity = (model, reflectionIntensity, base
  */
 export const DEFAULT_LIGHTING = {
   exposure: 0.5, // Unified higher exposure default
-  ambient: 0.4,
+  ambient: 1.0,
   key: 1.8,
   fill: 0.2,
   rim: 0.4,
@@ -230,14 +298,14 @@ export const DEFAULT_LIGHTING = {
  * Mirror Material Lighting Controls Component
  * Uses LightingManager parent object for lighting state
  */
-export const MirrorLightingControls = ({ 
-  lightingManager, 
-  reflectionIntensity, 
+export const MirrorLightingControls = ({
+  lightingManager,
+  reflectionIntensity,
   onReflectionIntensityChange
 }) => {
   // Get current lighting from LightingManager if provided, otherwise use fallback
   const lighting = lightingManager ? lightingManager.getLighting() : { exposure: 2.2, ambient: 0.4, key: 1.8, fill: 0.2, rim: 0.4 };
-  
+
   // Handler to update lighting through LightingManager
   const handleLightingChange = (newLighting) => {
     if (lightingManager) {
@@ -269,7 +337,7 @@ export const MirrorLightingControls = ({
           Control mirror reflection strength (higher = more reflective)
         </div>
       </div>
-      
+
     </div>
   );
 };

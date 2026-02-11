@@ -59,7 +59,7 @@ export const ACRYLIC_PRESET = {
 export const classifyMaterial = ({ meshName, material, materialType }) => {
   const matName = (material?.name || "").toLowerCase();
   const meshNameLower = (meshName || "").toLowerCase();
-  
+
   // PRINT: Has color map (artwork layer) - check this first
   const hasArtworkMap = !!material?.map;
   if (hasArtworkMap) {
@@ -69,7 +69,13 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
       return "PRINT";
     }
   }
-  
+
+  // ✅ ADD THIS HERE (before GLASS detection)
+  // Acrylic back should never be GLASS
+  if (meshNameLower.includes("acrylic") && meshNameLower.includes("back")) {
+    return "DEFAULT"; // keeps it matte/non-glass
+  }
+
   // GLASS: Check for glass/cover/plexi indicators OR transmission > 0
   // This includes acrylic covers and transparent materials
   if (
@@ -87,12 +93,12 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
   ) {
     return "GLASS";
   }
-  
+
   // ACRYLIC: For acrylic material type, default to ACRYLIC role if not classified above
   if (materialType === "ACRYLIC") {
     return "ACRYLIC";
   }
-  
+
   return "DEFAULT";
 };
 
@@ -104,24 +110,39 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
   // Use BaseMaterial's applyPreset to handle material upgrades and properties
   // BaseMaterial will handle downgrading PhysicalMaterial to StandardMaterial for PRINT if needed
   const updatedMat = applyPreset(material, preset, renderer, role, options);
-  
+
   // For PRINT role (artwork layer), ensure texture is visible
   if (role === "PRINT") {
     // Enable tone mapping so exposure affects brightness
     // This allows the exposure slider to brighten the artwork
     updatedMat.toneMapped = true;
-    
-    // Ensure transparent for PNG alpha support
-    updatedMat.transparent = true;
+
+    // IMPORTANT: Use alphaTest instead of transparent to avoid transparent sorting instability
+    // This keeps PNG cutouts working without causing z-fighting with the base layer
+    updatedMat.transparent = false;  // Keep in opaque render pass
     updatedMat.opacity = 1.0;
-    
+    updatedMat.alphaTest = 0.001;   // Small alpha test for PNG cutouts (avoids blending)
+    updatedMat.depthWrite = true;    // Write to depth buffer
+    updatedMat.depthTest = true;     // Test depth
+
+    // Make artwork strictly matte and non-reflective (only texture/color, no env reflections)
+    if ("metalness" in updatedMat) updatedMat.metalness = 0.0;
+    if ("roughness" in updatedMat) updatedMat.roughness = 1.0; // fully matte
+    if ("envMapIntensity" in updatedMat) updatedMat.envMapIntensity = 0.0;
+    // Remove any clearcoat/specular style highlights
+    if ("clearcoat" in updatedMat) updatedMat.clearcoat = 0.0;
+    if ("clearcoatRoughness" in updatedMat) updatedMat.clearcoatRoughness = 1.0;
+    if ("specularIntensity" in updatedMat) updatedMat.specularIntensity = 0.0;
+    // Ensure no direct envMap is assigned (we rely on scene.environment for glass only)
+    updatedMat.envMap = null;
+
     // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
     if (updatedMat.isMeshPhysicalMaterial) {
       updatedMat.transmission = 0;
       updatedMat.thickness = 0;
       updatedMat.ior = 1.0;
     }
-    
+
     // CRITICAL: Ensure texture map is visible and properly configured
     if (updatedMat.map) {
       updatedMat.map.needsUpdate = true;
@@ -130,27 +151,27 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
         // If texture image is missing, log a warning but don't break
       }
     }
-    
+
     // Ensure white base color for artwork (BaseMaterial already does this, but ensure it)
     if (updatedMat.color) {
       updatedMat.color.set(0xffffff);
     }
   }
-  
+
   // For GLASS and ACRYLIC roles, ensure proper glass-like properties
   if ((role === "GLASS" || role === "ACRYLIC") && updatedMat.isMeshPhysicalMaterial) {
     // Ensure transparency is enabled for transmission
     updatedMat.transparent = true;
     updatedMat.opacity = 1.0; // Full opacity, transparency comes from transmission
-    
+
     // Use a neutral, pure white base for glass so it doesn't tint the artwork
     // This keeps reflections but avoids adding any grey cast to whites behind the acrylic
     updatedMat.color.setRGB(1.0, 1.0, 1.0);
-    
+
     // Set attenuation for realistic light transmission (neutral white)
     updatedMat.attenuationColor = new THREE.Color(0xffffff);
     updatedMat.attenuationDistance = 1.0;
-    
+
     // Depth settings for proper rendering
     updatedMat.depthWrite = false; // Important for transparent materials
     updatedMat.depthTest = true;
@@ -161,34 +182,208 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
       updatedMat.color.set(0xffffff);
     }
   }
-  
+
   return updatedMat;
+};
+
+/**
+ * Apply matte to artwork and glossy to glass based on mesh names
+ * Artwork_FullBleed + Artwork_Shrunk + Acrylic_Back → matte + no reflections
+ * Glass → glossy + reflective
+ */
+export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity = 1.0) {
+  if (!model) return;
+
+  model.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+
+    // -------------------------
+    // ARTWORK + ACRYLIC_BACK => MATTE + NO REFLECTIONS
+    // -------------------------
+    const objName = obj.name || "";
+    const objNameLower = objName.toLowerCase();
+    const isArtworkFull =
+      objName === "Artwork_FullBleed" ||
+      (objNameLower.includes("artwork") &&
+        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")));
+    const isArtworkShrunk =
+      objName === "Artwork_Shrunk" ||
+      (objNameLower.includes("artwork") &&
+        (objNameLower.includes("shrunk") || objNameLower.includes("shrink")));
+    const isArtwork = isArtworkFull || isArtworkShrunk;
+    const isAcrylicBack =
+      objName === "Acrylic_Back" ||
+      (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+
+    // ARTWORK: matte + no reflections (no emissive brightness)
+    if (isArtwork) {
+      mats.forEach((m) => {
+        // keep texture map but kill all env reflections and specular highlights
+        if ("metalness" in m) m.metalness = 0.0;
+        if ("roughness" in m) m.roughness = 1.0;          // matte
+        if ("envMapIntensity" in m) m.envMapIntensity = 0.0; // no env reflections
+        // Remove clearcoat/specular style highlights
+        if ("clearcoat" in m) m.clearcoat = 0.0;
+        if ("clearcoatRoughness" in m) m.clearcoatRoughness = 1.0;
+        if ("specularIntensity" in m) m.specularIntensity = 0.0;
+        // Ensure no direct envMap is used on artwork
+        m.envMap = null;
+        m.needsUpdate = true;
+      });
+      return;
+    }
+
+    // ACRYLIC_BACK: matte + no reflections + BRIGHT (like mirror back)
+    if (isAcrylicBack) {
+      mats.forEach((m) => {
+        applyAcrylicBackSettings(m);
+      });
+      return;
+    }
+
+    // -------------------------
+    // GLASS => GLOSSY + REFLECTIVE
+    // -------------------------
+    if (obj.name === "Glass") {
+      mats.forEach((m, idx) => {
+        let pm = m;
+
+        // upgrade to Physical for best glass response (only if not already)
+        if (!(pm instanceof THREE.MeshPhysicalMaterial)) {
+          const upgraded = new THREE.MeshPhysicalMaterial();
+          THREE.MeshStandardMaterial.prototype.copy.call(upgraded, m);
+          pm = upgraded;
+
+          if (Array.isArray(obj.material)) obj.material[idx] = pm;
+          else obj.material = pm;
+        }
+
+        // reflections
+        if (envMap) pm.envMap = envMap;
+        pm.envMapIntensity = reflectionIntensity;
+
+        // glossy
+        pm.roughness = 0.03;        // 0..0.08 nice
+        pm.metalness = 0;
+
+        // glass look
+        pm.transmission = 1.0;      // real glass
+        pm.thickness = 0.02;        // adjust for your scale (0.005..0.05)
+        pm.ior = 1.49;
+
+        // crisp highlights
+        pm.clearcoat = 1.0;
+        pm.clearcoatRoughness = 0.02;
+
+        pm.needsUpdate = true;
+      });
+    }
+  });
+}
+
+/**
+ * Applies matte and bright settings to Acrylic_Back materials
+ * Matches Mirror_Back approach: bright RGB with tone mapping enabled, mostly matte
+ */
+const applyAcrylicBackSettings = (mat) => {
+  if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
+
+  // Matte / non-reflective - mostly matte like mirror back
+  if ("metalness" in mat) mat.metalness = 0.0;
+  if ("roughness" in mat) mat.roughness = 0.8; // Mostly matte (like mirror back, not chalk-flat)
+  mat.envMap = null;
+  if ("envMapIntensity" in mat) mat.envMapIntensity = 0.0;
+  
+  // Remove all specular/clearcoat highlights
+  if ("clearcoat" in mat) mat.clearcoat = 0.0;
+  if ("clearcoatRoughness" in mat) mat.clearcoatRoughness = 1.0;
+  if ("specularIntensity" in mat) mat.specularIntensity = 0.0;
+
+  // Bright RGB like mirror back (but keep tone mapping enabled to prevent blowout)
+  // This creates the bright white appearance without the "white layer" effect of emissive
+  if (mat.color) {
+    mat.color.setRGB(1.5, 1.5, 1.5); // Bright like mirror back
+  }
+
+  // CRITICAL: Keep tone mapping enabled (unlike old approach) - prevents blowout
+  mat.toneMapped = true;
+
+  // Remove emissive (mirror back doesn't use emissive, uses bright RGB instead)
+  if (mat.emissive) {
+    mat.emissive.set(0x000000);
+    mat.emissiveIntensity = 0.0;
+  }
+
+  // CRITICAL: Remove any transmission/glass properties that might have been set by presets
+  if (mat.isMeshPhysicalMaterial) {
+    mat.transmission = 0;
+    mat.thickness = 0;
+    mat.ior = 1.0;
+    mat.clearcoat = 0;
+    mat.clearcoatRoughness = 1.0;
+  }
+
+  mat.needsUpdate = true;
 };
 
 /**
  * Updates acrylic materials when environment map changes
  * This is called by the main component to update materials
+ * IMPORTANT: Artwork meshes and Acrylic_Back are skipped to preserve matte properties
  */
 export const updateAcrylicMaterials = (model, envMap, showReflections, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
-  
+
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
+
+    // CRITICAL: Skip artwork layers and Acrylic_Back - they should stay matte with no reflections
+    const objName = obj.name || "";
+    const objNameLower = objName.toLowerCase();
+    const isArtworkFull =
+      objName === "Artwork_FullBleed" ||
+      (objNameLower.includes("artwork") &&
+        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")));
+    const isArtworkShrunk =
+      objName === "Artwork_Shrunk" ||
+      (objNameLower.includes("artwork") &&
+        (objNameLower.includes("shrunk") || objNameLower.includes("shrink")));
+    const isArtwork = isArtworkFull || isArtworkShrunk;
+    const isAcrylicBack =
+      objName === "Acrylic_Back" ||
+      (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+
+    // Skip ONLY artwork (keep matte/no reflections set elsewhere)
+    if (isArtwork) return;
+
+    // Acrylic_Back: force bright + matte + no reflections (like Mirror_Back)
+    if (isAcrylicBack) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        applyAcrylicBackSettings(mat);
+      });
+
+      return; // IMPORTANT: don't let generic env logic touch it
+    }
+
+
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
         // Use scene.environment (set by main component)
         mat.envMap = null;
-        
+
         // Get base intensity from the map (stored during initial load)
         const baseIntensity = baseEnvMapIntensities.get(mat);
-        
+
         if (baseIntensity !== undefined) {
           // For glass/acrylic materials, use higher intensity for glossy reflections
           // For print materials, use lower intensity to prevent color spillage
-          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial && 
+          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
             (mat.transmission !== undefined && mat.transmission > 0.5);
-          
+
           if (isGlassOrAcrylic) {
             // Glass/acrylic: keep strong reflections but slightly reduce intensity
             // to avoid washing out whites behind the acrylic
@@ -199,22 +394,22 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
           }
         } else if (mat.envMapIntensity !== undefined) {
           // Fallback: determine based on material properties
-          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial && 
+          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
             (mat.transmission !== undefined && mat.transmission > 0.5);
-          
+
           if (isGlassOrAcrylic) {
             mat.envMapIntensity = mat.envMapIntensity * 0.8 * reflectionIntensity;
           } else {
             mat.envMapIntensity = mat.envMapIntensity * 0.6 * reflectionIntensity;
           }
         }
-        
+
         // For glass/acrylic materials, use brighter color
         // For print materials, use white to prevent tinting
         if (mat.color) {
-          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial && 
+          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
             (mat.transmission !== undefined && mat.transmission > 0.5);
-          
+
           if (isGlassOrAcrylic) {
             // Use brighter color for glass
             mat.color.setRGB(0.98, 0.98, 0.98);
@@ -223,7 +418,7 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
             mat.color.set(0xffffff);
           }
         }
-        
+
         mat.needsUpdate = true;
       }
     });
@@ -232,22 +427,42 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
 
 /**
  * Updates acrylic materials when reflection intensity changes
+ * IMPORTANT: Artwork meshes and Acrylic_Back are skipped to preserve matte properties
  */
 export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
-  
+
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
+
+    // CRITICAL: Skip artwork layers and Acrylic_Back - they should stay matte with no reflections
+    const objName = obj.name || "";
+    const objNameLower = objName.toLowerCase();
+    const isArtwork = objName === "Artwork_FullBleed" || objName === "Artwork_Shrunk";
+    const isAcrylicBack = objName === "Acrylic_Back" || (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+
+    if (isArtwork) return;
+
+    if (isAcrylicBack) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        applyAcrylicBackSettings(mat);
+      });
+
+      return; // IMPORTANT: don't let generic env logic touch it
+    }
+
+
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
         // Get base intensity from the map (stored during initial load)
         const baseIntensity = baseEnvMapIntensities.get(mat);
-        
+
         // Determine if this is a glass/acrylic material or print material
-        const isGlassOrAcrylic = mat.isMeshPhysicalMaterial && 
+        const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
           (mat.transmission !== undefined && mat.transmission > 0.5);
-        
+
         if (baseIntensity !== undefined) {
           if (isGlassOrAcrylic) {
             // Glass/acrylic: keep strong reflections but slightly reduce intensity
@@ -259,17 +474,17 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
           }
         } else if (mat.envMapIntensity !== undefined) {
           // Fallback: use current intensity
-          const currentBase = isGlassOrAcrylic 
+          const currentBase = isGlassOrAcrylic
             ? mat.envMapIntensity / (1.0 * Math.max(reflectionIntensity, 0.1))
             : mat.envMapIntensity / (0.4 * Math.max(reflectionIntensity, 0.1));
-          
+
           if (isGlassOrAcrylic) {
             mat.envMapIntensity = currentBase * 0.8 * reflectionIntensity;
           } else {
             mat.envMapIntensity = currentBase * 0.6 * reflectionIntensity;
           }
         }
-        
+
         // For glass/acrylic materials, use brighter color
         // For print materials, use white to prevent tinting
         if (mat.color) {
@@ -281,7 +496,7 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
             mat.color.set(0xffffff);
           }
         }
-        
+
         mat.needsUpdate = true;
       }
     });
@@ -298,6 +513,9 @@ export const DEFAULT_LIGHTING = {
   key: 1.5, // Strong key light for highlights
   fill: 0.25, // Subtle fill to maintain contrast
   rim: 0.35, // Rim light for edge definition on glossy surfaces
+  // Acrylic-only: default brightness for super-white backing layer
+  // Using 1.5 for more emissive white appearance (emissiveIntensity, range 0.5-3.0)
+  acrylicBase: 1.5,
 };
 
 /**
@@ -307,14 +525,14 @@ export const DEFAULT_LIGHTING = {
 export const AcrylicLightingControls = ({ lightingManager, reflectionIntensity, onReflectionIntensityChange }) => {
   // Get current lighting from LightingManager if provided, otherwise use fallback
   const lighting = lightingManager ? lightingManager.getLighting() : { exposure: 2.0, ambient: 0.5, key: 1.5, fill: 0.25, rim: 0.35 };
-  
+
   // Handler to update lighting through LightingManager
   const handleLightingChange = (newLighting) => {
     if (lightingManager) {
       lightingManager.updateLighting(newLighting);
     }
   };
-  
+
   return (
     <div>
       {/* Acrylic-specific controls can be added here */}

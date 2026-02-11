@@ -4,22 +4,6 @@ import { GlbTextureSwapTester } from './demo/index.jsx';
 import { CURRENT_APP_MODE, APP_MODE, UI_CONFIG } from './config/appConfig.jsx';
 import './App.css';
 
-// Hook to detect mobile screen size
-const useIsMobile = () => {
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-  
-  return isMobile;
-};
-
 function App() {
   // Switch between API test mode and demo mode
   // Change CURRENT_APP_MODE in appConfig.jsx to switch modes
@@ -32,12 +16,11 @@ function App() {
   }
 
   // API Test Mode - Simplified interface
-  const isMobile = useIsMobile();
-  const [panelOpen, setPanelOpen] = useState(!isMobile); // Panel open by default on desktop, closed on mobile
   const viewerRef = useRef(null);
   const [status, setStatus] = useState('Ready - Upload model and texture to start');
   const [currentMode, setCurrentMode] = useState('fullBleed');
   const [materialType, setMaterialType] = useState('ACRYLIC');
+  const [reflectionIntensity, setReflectionIntensity] = useState(0.2);
   
   // File state - store File objects directly
   const [modelFile, setModelFile] = useState(null);
@@ -176,6 +159,13 @@ function App() {
     setStatus(`Material changed to: ${type}`);
   };
 
+  // Handle reflection intensity change
+  const handleReflectionIntensityChange = (value) => {
+    setReflectionIntensity(value);
+    viewerRef.current?.setReflectionIntensity(value);
+    setStatus(`Reflection intensity: ${value.toFixed(2)}`);
+  };
+
   // Cleanup URLs on unmount
   useEffect(() => {
     return () => {
@@ -190,7 +180,6 @@ function App() {
       width: '100vw',
       height: '100vh',
       display: 'flex',
-      flexDirection: isMobile ? 'column' : 'row',
       background: UI_CONFIG.background.gradient, // Match demo mode background
     }}>
       {/* Viewer */}
@@ -200,37 +189,18 @@ function App() {
         zIndex: 1,
         overflow: 'hidden',
         width: '100%',
-        height: isMobile ? (panelOpen ? '50%' : '100%') : '100%',
-        transition: 'height 0.3s ease',
+        height: '100%'
       }}>
-        {/* Mobile toggle button */}
-        {isMobile && (
-          <button
-            onClick={() => setPanelOpen(!panelOpen)}
-            style={{
-              position: 'absolute',
-              top: '10px',
-              right: '10px',
-              zIndex: 1001,
-              padding: '10px 15px',
-              backgroundColor: 'rgba(0, 0, 0, 0.8)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
-            }}
-          >
-            {panelOpen ? '▼ Hide' : '▲ Show'} Controls
-          </button>
-        )}
         <ArtworkViewer
           ref={viewerRef}
           onReady={(api) => {
             console.log('Viewer ready!', api);
             setStatus('Viewer ready - Upload files to start');
+            // Get initial reflection intensity from API
+            const lighting = api.getLighting();
+            if (lighting && typeof lighting.reflectionIntensity === 'number') {
+              setReflectionIntensity(lighting.reflectionIntensity);
+            }
           }}
           onError={(error) => {
             console.error('Viewer error:', error);
@@ -246,74 +216,45 @@ function App() {
       {/* Control Panel */}
       <div
         style={{
-          width: isMobile ? '100%' : '350px',
-          minWidth: isMobile ? '100%' : '350px',
-          maxWidth: isMobile ? '100%' : '350px',
+          width: '350px',
+          minWidth: '350px',
           backgroundColor: 'rgba(0, 0, 0, 0.95)',
           color: 'white',
-          padding: isMobile ? '15px' : '20px',
+          padding: '20px',
           overflowY: 'auto',
           fontFamily: 'monospace',
-          fontSize: isMobile ? '11px' : '12px',
-          position: isMobile ? 'absolute' : 'relative',
-          bottom: isMobile ? 0 : 'auto',
-          left: isMobile ? 0 : 'auto',
-          right: isMobile ? 0 : 'auto',
+          fontSize: '12px',
+          position: 'relative',
           zIndex: 1000,
-          boxShadow: isMobile ? '0 -2px 10px rgba(0, 0, 0, 0.5)' : '-2px 0 10px rgba(0, 0, 0, 0.5)',
+          boxShadow: '-2px 0 10px rgba(0, 0, 0, 0.5)',
           flexShrink: 0,
-          height: isMobile ? (panelOpen ? '50%' : '0') : '100vh',
-          maxHeight: isMobile ? '50%' : '100vh',
-          display: isMobile ? (panelOpen ? 'flex' : 'none') : 'flex',
+          height: '100vh',
+          display: 'flex',
           flexDirection: 'column',
-          transition: isMobile ? 'height 0.3s ease, opacity 0.3s ease' : 'none',
-          opacity: isMobile ? (panelOpen ? 1 : 0) : 1,
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-          <h2 style={{ marginTop: 0, marginBottom: 0, color: '#4CAF50', fontSize: isMobile ? '16px' : '20px' }}>
-            API Test Panel
-          </h2>
-          {isMobile && (
-            <button
-              onClick={() => setPanelOpen(false)}
-              style={{
-                padding: '5px 10px',
-                backgroundColor: 'transparent',
-                color: 'white',
-                border: '1px solid #666',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-              }}
-            >
-              ✕
-            </button>
-          )}
-        </div>
+        <h2 style={{ marginTop: 0, color: '#4CAF50' }}>API Test Panel</h2>
         
         {/* Status */}
         <div
           style={{
-            padding: isMobile ? '12px' : '10px',
+            padding: '10px',
             backgroundColor: 'rgba(255, 255, 255, 0.1)',
             borderRadius: '4px',
-            marginBottom: isMobile ? '15px' : '20px',
-            minHeight: isMobile ? '50px' : '40px',
-            fontSize: isMobile ? '12px' : '12px',
-            lineHeight: isMobile ? '1.5' : '1.4',
+            marginBottom: '20px',
+            minHeight: '40px',
           }}
         >
           <strong>Status:</strong> {status}
         </div>
 
         {/* File Uploads */}
-        <div style={{ marginBottom: isMobile ? '15px' : '20px' }}>
-          <h3 style={{ color: '#FFC107', marginTop: 0, fontSize: isMobile ? '13px' : '14px' }}>File Uploads</h3>
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>File Uploads</h3>
           
           {/* Model Upload */}
-          <div style={{ marginBottom: isMobile ? '12px' : '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: isMobile ? '12px' : '11px' }}>
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
               Model (GLB) *
             </label>
             <input
@@ -322,14 +263,13 @@ function App() {
               onChange={handleModelUpload}
               style={{
                 width: '100%',
-                padding: isMobile ? '12px' : '8px',
-                fontSize: isMobile ? '14px' : '11px',
+                padding: '8px',
+                fontSize: '11px',
                 backgroundColor: '#333',
                 color: 'white',
                 border: '1px solid #555',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
               }}
             />
             {modelFile && (
@@ -340,8 +280,8 @@ function App() {
           </div>
 
           {/* Artwork Texture Upload */}
-          <div style={{ marginBottom: isMobile ? '12px' : '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: isMobile ? '12px' : '11px' }}>
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
               Artwork Texture *
             </label>
             <input
@@ -350,14 +290,13 @@ function App() {
               onChange={handleArtworkUpload}
               style={{
                 width: '100%',
-                padding: isMobile ? '12px' : '8px',
-                fontSize: isMobile ? '14px' : '11px',
+                padding: '8px',
+                fontSize: '11px',
                 backgroundColor: '#333',
                 color: 'white',
                 border: '1px solid #555',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
               }}
             />
             {artworkFile && (
@@ -368,8 +307,8 @@ function App() {
           </div>
 
           {/* Frame Texture Upload (Optional) */}
-          <div style={{ marginBottom: isMobile ? '12px' : '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: isMobile ? '12px' : '11px' }}>
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
               Frame Texture (Optional)
             </label>
             <input
@@ -378,14 +317,13 @@ function App() {
               onChange={handleFrameUpload}
               style={{
                 width: '100%',
-                padding: isMobile ? '12px' : '8px',
-                fontSize: isMobile ? '14px' : '11px',
+                padding: '8px',
+                fontSize: '11px',
                 backgroundColor: '#333',
                 color: 'white',
                 border: '1px solid #555',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
               }}
             />
             {frameFile && (
@@ -398,25 +336,20 @@ function App() {
 
         {/* Material Type Selection */}
         <div style={{ marginBottom: '20px' }}>
-          <h3 style={{ color: '#FFC107', marginTop: 0, fontSize: isMobile ? '13px' : '14px' }}>Material Type</h3>
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', 
-            gap: isMobile ? '8px' : '5px' 
-          }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Material Type</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
             {['ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'].map((type) => (
               <button
                 key={type}
                 onClick={() => handleMaterialChange(type)}
                 style={{
-                  padding: isMobile ? '12px' : '8px',
+                  padding: '8px',
                   backgroundColor: materialType === type ? '#4CAF50' : '#666',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: isMobile ? '12px' : '11px',
-                  minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
+                  fontSize: '11px',
                 }}
               >
                 {type}
@@ -426,8 +359,8 @@ function App() {
         </div>
 
         {/* Mode Selection */}
-        <div style={{ marginBottom: isMobile ? '15px' : '20px' }}>
-          <h3 style={{ color: '#FFC107', marginTop: 0, fontSize: isMobile ? '13px' : '14px' }}>Mode</h3>
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Mode</h3>
           <div style={{ display: 'flex', gap: '5px' }}>
             <button
               onClick={() => {
@@ -436,14 +369,12 @@ function App() {
               }}
               style={{
                 flex: 1,
-                padding: isMobile ? '14px' : '10px',
+                padding: '10px',
                 backgroundColor: currentMode === 'fullBleed' ? '#2196F3' : '#666',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                fontSize: isMobile ? '14px' : '12px',
-                minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
               }}
             >
               Full Bleed
@@ -455,14 +386,12 @@ function App() {
               }}
               style={{
                 flex: 1,
-                padding: isMobile ? '14px' : '10px',
+                padding: '10px',
                 backgroundColor: currentMode === 'shrunk' ? '#2196F3' : '#666',
                 color: 'white',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
-                fontSize: isMobile ? '14px' : '12px',
-                minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
               }}
             >
               Shrunk
@@ -471,21 +400,20 @@ function App() {
         </div>
 
         {/* Setup Button */}
-        <div style={{ marginBottom: isMobile ? '15px' : '20px' }}>
+        <div style={{ marginBottom: '20px' }}>
           <button
             onClick={handleSetup}
             disabled={isLoading || !modelFile || !artworkUrl}
             style={{
               width: '100%',
-              padding: isMobile ? '16px' : '12px',
+              padding: '12px',
               backgroundColor: (!modelFile || !artworkUrl) ? '#555' : '#4CAF50',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
               cursor: (!modelFile || !artworkUrl) ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
-              fontSize: isMobile ? '16px' : '14px',
-              minHeight: isMobile ? '48px' : 'auto', // Touch-friendly height
+              fontSize: '14px',
             }}
           >
             {isLoading ? 'Loading...' : 'Setup Scene'}
@@ -493,22 +421,20 @@ function App() {
         </div>
 
         {/* Update Controls */}
-        <div style={{ marginBottom: isMobile ? '15px' : '20px' }}>
-          <h3 style={{ color: '#FFC107', marginTop: 0, fontSize: isMobile ? '13px' : '14px' }}>Update Textures</h3>
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Update Textures</h3>
           <button
             onClick={handleUpdateArtwork}
             disabled={isLoading || !artworkUrl}
             style={{
               width: '100%',
-              padding: isMobile ? '14px' : '10px',
+              padding: '10px',
               marginBottom: '5px',
               backgroundColor: (!artworkUrl) ? '#555' : '#4CAF50',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
               cursor: (!artworkUrl) ? 'not-allowed' : 'pointer',
-              fontSize: isMobile ? '14px' : '12px',
-              minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
             }}
           >
             Update Artwork
@@ -518,15 +444,13 @@ function App() {
             disabled={isLoading || !frameUrl}
             style={{
               width: '100%',
-              padding: isMobile ? '14px' : '10px',
+              padding: '10px',
               marginBottom: '5px',
               backgroundColor: (!frameUrl) ? '#555' : '#9C27B0',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
               cursor: (!frameUrl) ? 'not-allowed' : 'pointer',
-              fontSize: isMobile ? '14px' : '12px',
-              minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
             }}
           >
             Update Frame
@@ -534,36 +458,74 @@ function App() {
         </div>
 
         {/* Mode Switch */}
-        <div style={{ marginBottom: isMobile ? '15px' : '20px' }}>
+        <div style={{ marginBottom: '20px' }}>
           <button
             onClick={handleSwitchMode}
             disabled={isLoading}
             style={{
               width: '100%',
-              padding: isMobile ? '14px' : '10px',
+              padding: '10px',
               backgroundColor: '#2196F3',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
               cursor: isLoading ? 'not-allowed' : 'pointer',
-              fontSize: isMobile ? '14px' : '12px',
-              minHeight: isMobile ? '44px' : 'auto', // Touch-friendly height
             }}
           >
             Switch Mode ({currentMode === 'fullBleed' ? 'Shrunk' : 'Full Bleed'})
           </button>
         </div>
 
+        {/* Reflection Intensity Control */}
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Reflection Intensity</h3>
+          <div style={{ 
+            padding: '10px', 
+            backgroundColor: 'rgba(255, 255, 255, 0.05)', 
+            borderRadius: '4px',
+            marginBottom: '10px'
+          }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontSize: '11px',
+              color: '#aaa'
+            }}>
+              Intensity: {reflectionIntensity.toFixed(2)}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={reflectionIntensity}
+              onChange={(e) => handleReflectionIntensityChange(parseFloat(e.target.value))}
+              disabled={isLoading}
+              style={{
+                width: '100%',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+              }}
+            />
+            <div style={{ 
+              fontSize: '10px', 
+              color: '#888', 
+              marginTop: '5px',
+              lineHeight: '1.4'
+            }}>
+              Controls the intensity of environment map reflections on glass and reflective surfaces
+            </div>
+          </div>
+        </div>
+
         {/* Info */}
         <div
           style={{
-            padding: isMobile ? '12px' : '10px',
+            padding: '10px',
             backgroundColor: 'rgba(255, 255, 255, 0.05)',
             borderRadius: '4px',
-            fontSize: isMobile ? '11px' : '10px',
+            fontSize: '10px',
             color: '#aaa',
             marginTop: 'auto',
-            lineHeight: isMobile ? '1.6' : '1.5',
           }}
         >
           <strong>Instructions:</strong>

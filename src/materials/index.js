@@ -49,6 +49,7 @@ export const MATERIAL_MODULES = {
     updateMaterials: AcrylicMaterial.updateAcrylicMaterials,
     updateReflectionIntensity: AcrylicMaterial.updateAcrylicReflectionIntensity,
     updateExposure: AcrylicMaterial.updateAcrylicExposure,
+    applyArtworkMatteGlassGlossy: AcrylicMaterial.applyArtworkMatteGlassGlossy,
   },
   METAL: {
     name: "Metal Print",

@@ -44,6 +44,63 @@ export const applyDefaultPreset = (material, preset, renderer, role, options = {
 };
 
 /**
+ * Helper to detect back layer meshes (e.g. Back, Default_Back) that should be bright and matte
+ */
+const isBackLayer = (obj) => {
+  if (!obj || !obj.name) return false;
+  const meshName = obj.name.toLowerCase();
+  return (
+    meshName === "back" ||
+    meshName === "default_back" ||
+    (meshName.includes("back") && !meshName.includes("artwork"))
+  );
+};
+
+/**
+ * Applies matte and bright settings to Back materials
+ * Matches Mirror_Back approach: bright RGB with tone mapping enabled, mostly matte
+ */
+const applyBackSettings = (mat) => {
+  if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
+
+  // Matte / non-reflective - mostly matte like mirror back
+  if ("metalness" in mat) mat.metalness = 0.0;
+  if ("roughness" in mat) mat.roughness = 0.8; // Mostly matte (like mirror back, not chalk-flat)
+  mat.envMap = null;
+  if ("envMapIntensity" in mat) mat.envMapIntensity = 0.0;
+  
+  // Remove all specular/clearcoat highlights
+  if ("clearcoat" in mat) mat.clearcoat = 0.0;
+  if ("clearcoatRoughness" in mat) mat.clearcoatRoughness = 1.0;
+  if ("specularIntensity" in mat) mat.specularIntensity = 0.0;
+
+  // Bright RGB like mirror back (but keep tone mapping enabled to prevent blowout)
+  if (mat.color) {
+    mat.color.setRGB(3.0, 3.0, 3.0); // Bright like mirror back
+  }
+
+  // CRITICAL: Keep tone mapping enabled - prevents blowout
+  mat.toneMapped = true;
+
+  // Remove emissive (mirror back doesn't use emissive, uses bright RGB instead)
+  if (mat.emissive) {
+    mat.emissive.set(0x000000);
+    mat.emissiveIntensity = 0.0;
+  }
+
+  // CRITICAL: Remove any transmission/glass properties that might have been set by presets
+  if (mat.isMeshPhysicalMaterial) {
+    mat.transmission = 0;
+    mat.thickness = 0;
+    mat.ior = 1.0;
+    mat.clearcoat = 0;
+    mat.clearcoatRoughness = 1.0;
+  }
+
+  mat.needsUpdate = true;
+};
+
+/**
  * Updates default materials when environment map changes
  */
 export const updateDefaultMaterials = (model, envMap, showReflections, reflectionIntensity, baseEnvMapIntensities) => {
@@ -51,6 +108,16 @@ export const updateDefaultMaterials = (model, envMap, showReflections, reflectio
   
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
+    
+    // Back layer: force bright + matte + no reflections (like Mirror_Back)
+    if (isBackLayer(obj)) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        applyBackSettings(mat);
+      });
+      return; // IMPORTANT: don't let generic env logic touch it
+    }
+    
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
@@ -73,6 +140,16 @@ export const updateDefaultReflectionIntensity = (model, reflectionIntensity, bas
   
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
+    
+    // Back layer: keep bright + matte + no reflections (like Mirror_Back)
+    if (isBackLayer(obj)) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        applyBackSettings(mat);
+      });
+      return; // IMPORTANT: don't let generic env logic touch it
+    }
+    
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {

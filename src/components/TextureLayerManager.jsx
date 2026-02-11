@@ -268,6 +268,71 @@ export default function TextureLayerManager({
     return canvas;
   };
 
+  /**
+   * Create an emissive mask that only lights up near-white, low-saturation pixels.
+   * This is used for acrylic prints to get a “super-white paper” look without
+   * washing out colored regions of the artwork.
+   *
+   * @param {HTMLCanvasElement} sourceCanvas - The composite canvas (white base + artwork)
+   * @param {number} whiteThreshold - Luminance threshold (0–1) above which pixels are considered white-ish
+   * @param {number} saturationMax - Maximum saturation (0–1) for a pixel to be considered “neutral” (non-colored)
+   */
+  const createWhiteEmissiveMaskCanvas = (sourceCanvas, whiteThreshold = 0.92, saturationMax = 0.18) => {
+    if (!sourceCanvas || !sourceCanvas.width || !sourceCanvas.height) {
+      return null;
+    }
+
+    const w = sourceCanvas.width;
+    const h = sourceCanvas.height;
+
+    const mask = document.createElement("canvas");
+    mask.width = w;
+    mask.height = h;
+
+    const ctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    const mctx = mask.getContext("2d", { willReadFrequently: true });
+
+    if (!ctx || !mctx) {
+      return null;
+    }
+
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    const out = mctx.createImageData(w, h);
+    const o = out.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+      const a = data[i + 3] / 255;
+
+      // Luminance in linear-ish space
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+      // Simple saturation approximation
+      const maxv = Math.max(r, g, b);
+      const minv = Math.min(r, g, b);
+      const sat = maxv === 0 ? 0 : (maxv - minv) / maxv;
+
+      // Only treat pixels as “paper white” if:
+      // - Visible (alpha not ~0)
+      // - Bright enough
+      // - Low saturation (i.e. neutral, not colored)
+      const isWhite = a > 0.001 && lum >= whiteThreshold && sat <= saturationMax;
+
+      const v = isWhite ? 255 : 0;
+      o[i] = v;       // R
+      o[i + 1] = v;   // G
+      o[i + 2] = v;   // B
+      o[i + 3] = 255; // A (opaque mask)
+    }
+
+    mctx.putImageData(out, 0, 0);
+    return mask;
+  };
+
   // Apply test texture to a specific layer
   const applyTestTextureToLayer = (layerId, textureNumber) => {
     const layer = textureLayers.find(l => l.id === layerId);
@@ -426,6 +491,45 @@ export default function TextureLayerManager({
       ctx.drawImage(img, 0, 0, width, height);
       
       processedImage = canvas;
+    }
+
+    // For acrylic artwork layers, build an emissive mask that only boosts
+    // near-white “paper” regions instead of the whole artwork.
+    if (isAcrylic && (isFullBleed || isShrunk) && processedImage) {
+      const maskCanvas = processedImage instanceof HTMLCanvasElement
+        ? createWhiteEmissiveMaskCanvas(processedImage, 0.92, 0.18)
+        : null;
+
+      if (maskCanvas && (finalMat.isMeshStandardMaterial || finalMat.isMeshPhysicalMaterial)) {
+        let emissiveTex;
+        try {
+          if (textureManager && textureManager.createTextureFromImage) {
+            emissiveTex = textureManager.createTextureFromImage(maskCanvas, {
+              flipY: false,
+            });
+          } else {
+            emissiveTex = new THREE.Texture(maskCanvas);
+            emissiveTex.wrapS = THREE.ClampToEdgeWrapping;
+            emissiveTex.wrapT = THREE.ClampToEdgeWrapping;
+            emissiveTex.generateMipmaps = false;
+            emissiveTex.minFilter = THREE.LinearFilter;
+            emissiveTex.magFilter = THREE.LinearFilter;
+            emissiveTex.flipY = false;
+            emissiveTex.needsUpdate = true;
+          }
+
+          if (emissiveTex) {
+            finalMat.emissive = new THREE.Color(0xffffff);
+            finalMat.emissiveMap = emissiveTex;
+            // Stronger boost for “super-white” paper look (tweak as needed)
+            finalMat.emissiveIntensity = 20;
+            // Keep tone mapping so global exposure still behaves correctly
+            finalMat.toneMapped = true;
+          }
+        } catch (e) {
+          // If emissive mask creation fails, fall back gracefully with no emissive boost
+        }
+      }
     }
     
     // Dispose old texture to prevent remnants (but only if it's not the original)

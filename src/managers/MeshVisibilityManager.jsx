@@ -172,18 +172,24 @@ export class MeshVisibilityManager {
       const meshName = obj.name || `Mesh_${meshIdCounter}`;
       const meshType = this.classifyMeshType(meshName);
 
-      // Ensure Wood_Back, Mirror_Back, WhiteMetal_Back, SilverMetal_Back, Acrylic_Back, Glass and all back meshes are always visible
-      const isBackMesh = meshType === "back" || meshType === "woodBack" || meshType === "mirrorBack" || 
-                         meshType === "whiteMetalBack" || meshType === "silverMetalBack" || meshType === "acrylicBack";
-      const isGlass = meshType === "glass";
-      if ((isBackMesh || isGlass) && obj) {
+      // Ensure *back* meshes are always visible by default.
+      // Glass is NOT treated as a back mesh so it can be controlled independently.
+      const isBackMesh =
+        meshType === "back" ||
+        meshType === "woodBack" ||
+        meshType === "mirrorBack" ||
+        meshType === "whiteMetalBack" ||
+        meshType === "silverMetalBack" ||
+        meshType === "acrylicBack";
+
+      if (isBackMesh && obj) {
         obj.visible = true;
       }
 
       const meshInfo = {
         id: meshId,
         name: meshName,
-        visible: (isBackMesh || isGlass) ? true : obj.visible,
+        visible: isBackMesh ? true : obj.visible,
         mesh: obj,
         hasMaterial: !!obj.material,
         meshType: meshType,
@@ -202,7 +208,7 @@ export class MeshVisibilityManager {
    * Rules:
    * - If Artwork_FullBleed is ON → only Wood_FullBleed (for wood), Mirror_FullBleed (for mirror), Acrylic_FullBleed (for acrylic), or Metal_White_FullBleed (for white metals) should be ON
    * - If Artwork_Shrunk is ON → Frame_Edge, Wood_Shrunk/Mirror_Shrunk/Acrylic_Shrunk/Metal_White_Shrunk, and Artwork_Shrunk should be ON
-   * - Wood_Back, Mirror_Back, Acrylic_Back, Glass, and Metal_White_Back always ON
+   * - Wood_Back, Mirror_Back, Acrylic_Back, and Metal_White_Back always ON
    * - For silver metal materials: If fullBleed is ON → shrunk and frame must be OFF
    * - For silver metal materials: If shrunk is ON → frame is ON and fullBleed is OFF
    * - Back meshes (Metal_Box_Silver_Back, Metal_Box_White_Back, Wood_Back, Mirror_Back, Acrylic_Back) always ON
@@ -227,7 +233,6 @@ export class MeshVisibilityManager {
     const acrylicFullBleed = this.meshes.find(m => m.meshType === "acrylicFullBleed");
     const acrylicShrunk = this.meshes.find(m => m.meshType === "acrylicShrunk");
     const acrylicBack = this.meshes.find(m => m.meshType === "acrylicBack");
-    const glass = this.meshes.find(m => m.meshType === "glass");
     
     // Find white metal meshes
     const whiteMetalFullBleed = this.meshes.find(m => m.meshType === "whiteMetalFullBleed");
@@ -243,10 +248,16 @@ export class MeshVisibilityManager {
     // Find silver metal shrunk variants
     const silverShrunk = this.meshes.find(m => m.meshType === "silverShrunk");
     
-    // Ensure Wood_Back, Mirror_Back, Acrylic_Back, Glass, WhiteMetal_Back and all back meshes are always visible
+    // Ensure back meshes are always visible
     this.meshes.forEach(m => {
-      if ((m.meshType === "back" || m.meshType === "woodBack" || m.meshType === "mirrorBack" || 
-           m.meshType === "whiteMetalBack" || m.meshType === "acrylicBack" || m.meshType === "glass") && m.mesh) {
+      if (
+        (m.meshType === "back" ||
+         m.meshType === "woodBack" ||
+         m.meshType === "mirrorBack" ||
+         m.meshType === "whiteMetalBack" ||
+         m.meshType === "acrylicBack") &&
+        m.mesh
+      ) {
         m.mesh.visible = true;
         m.visible = true;
       }
@@ -257,6 +268,15 @@ export class MeshVisibilityManager {
       // Artwork_FullBleed ON → only Wood_FullBleed, Mirror_FullBleed, Acrylic_FullBleed, Metal_White_FullBleed, or Metal_Silver_FullBleed should be ON
       this.meshes.forEach(m => {
         if (m.mesh) {
+          // Defensive: Preserve acrylic base layer visibility when parent visibility changes
+          if (m.mesh.children) {
+            m.mesh.children.forEach(child => {
+              if (child.userData?.isAcrylicEmissiveBase) {
+                child.visible = m.mesh.visible; // Keep base layer in sync with parent
+              }
+            });
+          }
+          
           if (m.meshType === "woodFullBleed" || m.meshType === "mirrorFullBleed" || 
               m.meshType === "acrylicFullBleed" || m.meshType === "whiteMetalFullBleed" || 
               m.meshType === "silverFullBleed") {
@@ -274,6 +294,15 @@ export class MeshVisibilityManager {
       // Artwork_Shrunk ON → Frame_Edge, Wood_Shrunk/Mirror_Shrunk/Acrylic_Shrunk/Metal_White_Shrunk/Metal_Silver_Shrunk, and Artwork_Shrunk should be ON
       this.meshes.forEach(m => {
         if (m.mesh) {
+          // Defensive: Preserve acrylic base layer visibility when parent visibility changes
+          if (m.mesh.children) {
+            m.mesh.children.forEach(child => {
+              if (child.userData?.isAcrylicEmissiveBase) {
+                child.visible = m.mesh.visible; // Keep base layer in sync with parent
+              }
+            });
+          }
+          
           if (m.meshType === "frame" || m.meshType === "woodShrunk" || 
               m.meshType === "mirrorShrunk" || m.meshType === "acrylicShrunk" || 
               m.meshType === "whiteMetalShrunk" || m.meshType === "silverShrunk" || 
@@ -303,6 +332,15 @@ export class MeshVisibilityManager {
         // Full bleed mode: Show all full bleed variants, hide all shrunk and frame
         this.meshes.forEach(m => {
           if (m.mesh) {
+            // Defensive: Preserve acrylic base layer visibility when parent visibility changes
+            if (m.mesh.children) {
+              m.mesh.children.forEach(child => {
+                if (child.userData?.isAcrylicEmissiveBase) {
+                  child.visible = m.mesh.visible; // Keep base layer in sync with parent
+                }
+              });
+            }
+            
             if (m.meshType === "fullBleed" || m.meshType === "silverFullBleed" || 
                 m.meshType === "whiteMetalFullBleed" || m.meshType === "acrylicFullBleed") {
               m.mesh.visible = true;
@@ -319,6 +357,14 @@ export class MeshVisibilityManager {
         // Shrunk mode: Show frame and all shrunk variants, hide all full bleed variants
         this.meshes.forEach(m => {
           if (m.mesh) {
+            // Defensive: Preserve acrylic base layer visibility when parent visibility changes
+            if (m.mesh.children) {
+              m.mesh.children.forEach(child => {
+                if (child.userData?.isAcrylicEmissiveBase) {
+                  child.visible = m.mesh.visible; // Keep base layer in sync with parent
+                }
+              });
+            }
             if (m.meshType === "frame" || m.meshType === "shrunk" || 
                 m.meshType === "silverShrunk" || m.meshType === "whiteMetalShrunk" ||
                 m.meshType === "acrylicShrunk") {
@@ -350,11 +396,15 @@ export class MeshVisibilityManager {
     const mesh = this.meshes.find(m => m.id === meshId);
     if (!mesh) return;
 
-    // Never allow toggling back meshes or glass off (including Wood_Back, Mirror_Back, Acrylic_Back, Glass, WhiteMetal_Back, and SilverMetal_Back)
-    if (mesh.meshType === "back" || mesh.meshType === "woodBack" || mesh.meshType === "mirrorBack" || 
-        mesh.meshType === "acrylicBack" || mesh.meshType === "glass" ||
-        mesh.meshType === "whiteMetalBack" || mesh.meshType === "silverMetalBack") {
-      // Force back/glass to always be visible
+    // Never allow toggling back meshes off (Glass can be toggled independently)
+    if (
+      mesh.meshType === "back" ||
+      mesh.meshType === "woodBack" ||
+      mesh.meshType === "mirrorBack" ||
+      mesh.meshType === "acrylicBack" ||
+      mesh.meshType === "whiteMetalBack" ||
+      mesh.meshType === "silverMetalBack"
+    ) {
       if (mesh.mesh) {
         mesh.mesh.visible = true;
       }
@@ -506,11 +556,17 @@ export class MeshVisibilityManager {
       }
     }
 
-    // Ensure back meshes and glass are always visible (including Wood_Back, Mirror_Back, Acrylic_Back, Glass, WhiteMetal_Back, and SilverMetal_Back)
+    // Ensure back meshes are always visible (Glass remains independent)
     this.meshes.forEach(m => {
-      if ((m.meshType === "back" || m.meshType === "woodBack" || m.meshType === "mirrorBack" || 
-           m.meshType === "acrylicBack" || m.meshType === "glass" ||
-           m.meshType === "whiteMetalBack" || m.meshType === "silverMetalBack") && m.mesh) {
+      if (
+        (m.meshType === "back" ||
+         m.meshType === "woodBack" ||
+         m.meshType === "mirrorBack" ||
+         m.meshType === "acrylicBack" ||
+         m.meshType === "whiteMetalBack" ||
+         m.meshType === "silverMetalBack") &&
+        m.mesh
+      ) {
         m.mesh.visible = true;
         m.visible = true;
       }

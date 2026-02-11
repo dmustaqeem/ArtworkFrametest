@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useImperativeHandle } from "react";
 import * as THREE from "three";
+import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { registerMaterialLightingDefaults } from "../materials/index.js";
 import { createLightingManager } from "../lighting/index.jsx";
 import {
@@ -67,6 +68,302 @@ export function useArtworkViewer({
   const meshVisibilityHook = useMeshVisibility();
   const lighting = useLighting(lightingManagerRef);
 
+  // ============================
+  // MIRROR REFLECTORS (planar)
+  // ============================
+  const MIRROR_REFLECTOR_TAG = "isMirrorReflector";
+
+  const removeExistingMirrorReflectors = (model) => {
+    if (!model) return;
+    const toRemove = [];
+    model.traverse((obj) => {
+      if (obj.userData && obj.userData[MIRROR_REFLECTOR_TAG]) {
+        toRemove.push(obj);
+      }
+    });
+    toRemove.forEach((obj) => {
+      if (obj.parent) {
+        obj.parent.remove(obj);
+      }
+    });
+  };
+
+  const createMirrorReflectors = (model, options = {}) => {
+    if (!model) return;
+
+    const { textureSize = 1024 } = options;
+
+    // Ensure we don't create duplicates on re-load
+    removeExistingMirrorReflectors(model);
+
+    // Make sure world matrices are up to date before baking transforms
+    model.updateMatrixWorld(true);
+
+    model.traverse((obj) => {
+      if (!obj.isMesh || !obj.geometry || !obj.name) return;
+
+      const nameLower = obj.name.toLowerCase();
+      const isMirrorPlane =
+        nameLower === "mirror_fullbleed" ||
+        nameLower === "mirror_shrunk";
+
+      if (!isMirrorPlane) return;
+
+      // Clone geometry and bake the LOCAL transform (including scale) into it.
+      // This avoids non-uniform object scale on the Reflector, which distorts reflections.
+      const bakedGeo = obj.geometry.clone();
+      bakedGeo.applyMatrix4(obj.matrix);
+
+      const reflector = new Reflector(bakedGeo, {
+        clipBias: 0.003,
+        textureWidth: textureSize,
+        textureHeight: textureSize,
+        color: 0xffffff,
+      });
+
+      reflector.name = `${obj.name}_Reflector`;
+      reflector.userData = {
+        ...(reflector.userData || {}),
+        [MIRROR_REFLECTOR_TAG]: true,
+      };
+
+      // Reflector now lives in the parent's local space with baked geometry;
+      // keep its transform identity so reflections are not stretched.
+      reflector.position.set(0, 0, 0);
+      reflector.quaternion.set(0, 0, 0, 1);
+      reflector.scale.set(1, 1, 1);
+
+      // Render on top of the original mirror surface
+      reflector.renderOrder = (obj.renderOrder || 0) + 1;
+
+      // Hide original mirror mesh to avoid z-fighting
+      obj.visible = false;
+
+      if (obj.parent) {
+        obj.parent.add(reflector);
+      }
+    });
+  };
+
+  const syncMirrorReflectorVisibility = (model, mode) => {
+    if (!model) return;
+    const wantFullBleed = mode === MODE_TYPES.FULL_BLEED;
+    const wantShrunk = mode === MODE_TYPES.SHRUNK;
+
+    model.traverse((obj) => {
+      if (!obj.userData || !obj.userData[MIRROR_REFLECTOR_TAG] || !obj.name) return;
+      const n = obj.name.toLowerCase();
+      if (n.includes("mirror_fullbleed")) {
+        obj.visible = wantFullBleed;
+      } else if (n.includes("mirror_shrunk")) {
+        obj.visible = wantShrunk;
+      }
+    });
+  };
+
+  // ============================================
+  // ACRYLIC: enforce artwork matte / glass glossy
+  // ============================================
+  const enforceAcrylicArtworkMatteGlassGlossy = (model, envMap, reflectionIntensity = 1.0) => {
+    if (!model) return;
+
+    model.traverse((obj) => {
+      if (!obj.isMesh || !obj.material || !obj.name) return;
+
+      const name = obj.name.toLowerCase();
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+
+      const isArtwork =
+        name === "artwork_fullbleed" ||
+        name === "artwork_shrunk" ||
+        (name.includes("artwork") &&
+          (name.includes("fullbleed") || name.includes("full_bleed") || name.includes("shrunk")));
+
+      const isGlass =
+        name === "glass" ||
+        name.includes("glass");
+
+      // Artwork: strictly matte, non‑reflective
+      if (isArtwork) {
+        mats.forEach((m) => {
+          if (!m) return;
+          if ("metalness" in m) m.metalness = 0.0;
+          if ("roughness" in m) m.roughness = 1.0;
+          if ("envMapIntensity" in m) m.envMapIntensity = 0.0;
+          // Ensure no direct envMap on artwork
+          m.envMap = null;
+          if ("clearcoat" in m) m.clearcoat = 0.0;
+          if ("clearcoatRoughness" in m) m.clearcoatRoughness = 1.0;
+          if ("specularIntensity" in m) m.specularIntensity = 0.0;
+          if ("sheen" in m) m.sheen = 0.0;
+          m.needsUpdate = true;
+        });
+      }
+
+      // Glass: glossy + reflective
+      if (isGlass) {
+        mats.forEach((m) => {
+          if (!m) return;
+          if (envMap) m.envMap = envMap;
+          if ("envMapIntensity" in m) m.envMapIntensity = reflectionIntensity;
+          if ("metalness" in m) m.metalness = 0.0;
+          if ("roughness" in m) m.roughness = 0.05;
+          if ("clearcoat" in m) m.clearcoat = 1.0;
+          if ("clearcoatRoughness" in m) m.clearcoatRoughness = 0.02;
+          m.needsUpdate = true;
+        });
+      }
+    });
+  };
+  // Helper: add a super‑white, non‑reflective, emissive base just under artwork for acrylics
+  // This does NOT modify artwork materials or textures; it only adds a thin backing layer
+  // under the Artwork_FullBleed and Artwork_Shrunk meshes (or Acrylic_FullBleed/Acrylic_Shrunk if they exist).
+  const addAcrylicEmissiveBaseLayers = (meshVisibilityManager, activeMaterialType) => {
+    if (!meshVisibilityManager || activeMaterialType !== "ACRYLIC") {
+      console.log('[AcrylicBase] Skipping - meshVisibilityManager:', !!meshVisibilityManager, 'activeMaterialType:', activeMaterialType);
+      return;
+    }
+
+    const meshes = meshVisibilityManager.getMeshes
+      ? meshVisibilityManager.getMeshes()
+      : meshVisibilityManager.meshes || [];
+
+    if (!Array.isArray(meshes) || meshes.length === 0) {
+      console.log('[AcrylicBase] No meshes found');
+      return;
+    }
+
+    console.log('[AcrylicBase] Checking meshes for acrylic base layers. Total meshes:', meshes.length);
+    console.log('[AcrylicBase] All meshes:', meshes.map(m => ({ name: m.name, meshType: m.meshType })));
+
+    meshes.forEach((info) => {
+      const meshType = info.meshType;
+      const parentMesh = info.mesh;
+
+      // Target artwork meshes (Artwork_FullBleed/Artwork_Shrunk) for acrylic base layer
+      // These are the meshes where textures are applied, so we need the base layer behind them
+      // Also support acrylic substrate meshes if they exist (Acrylic_FullBleed/Acrylic_Shrunk)
+      if (!parentMesh || !parentMesh.geometry) {
+        console.log('[AcrylicBase] Skipping - no parentMesh or geometry:', info.name, 'meshType:', meshType);
+        return;
+      }
+
+      // Check for artwork meshes first (most common case)
+      const isArtworkMesh = meshType === "fullBleed" || meshType === "shrunk";
+      // Also check for acrylic substrate meshes if model has separate substrate layers
+      const isAcrylicSubstrateMesh = meshType === "acrylicFullBleed" || meshType === "acrylicShrunk";
+
+      if (!isArtworkMesh && !isAcrylicSubstrateMesh) {
+        return;
+      }
+
+      console.log('[AcrylicBase] Found target mesh:', parentMesh.name, 'meshType:', meshType, 'isArtwork:', isArtworkMesh, 'isAcrylicSubstrate:', isAcrylicSubstrateMesh);
+
+      // Get current acrylicBase brightness value (defaults to 1.5 for more emissive white)
+      const baseIntensity =
+        (lighting.lighting && typeof lighting.lighting.acrylicBase === "number"
+          ? lighting.lighting.acrylicBase
+          : 1.5);
+
+      // Check if base layer already exists - update it instead of creating duplicate
+      const existingBaseChild = parentMesh.children?.find(
+        (child) => child.userData && child.userData.isAcrylicEmissiveBase
+      );
+
+      if (existingBaseChild) {
+        // Update existing base layer material to ensure it stays white
+        existingBaseChild.visible = true;  // Ensure it's visible
+        if (existingBaseChild.material) {
+          const mats = Array.isArray(existingBaseChild.material)
+            ? existingBaseChild.material
+            : [existingBaseChild.material];
+          mats.forEach((m) => {
+            m.color?.set(0xffffff);
+            m.emissive?.set(0xffffff);
+            m.emissiveIntensity = baseIntensity;
+            m.toneMapped = false;  // Critical: prevent ACES from greying it out
+            m.envMap = null;
+            m.envMapIntensity = 0.0;
+            m.polygonOffset = true;
+            m.polygonOffsetFactor = 2;  // Increased to push back more
+            m.polygonOffsetUnits = 2;   // Increased to push back more
+            m.depthWrite = true;  // Ensure depth write is enabled
+            m.depthTest = true;
+            m.needsUpdate = true;
+          });
+        }
+        console.log('[AcrylicBase] Updated existing base layer for:', parentMesh.name, 'visible:', existingBaseChild.visible, 'parent visible:', parentMesh.visible);
+        return;
+      }
+
+      // Create new base layer with emissive material (stays white, not tone-mapped)
+      const baseMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffffff,  // IMPORTANT: don't keep it black
+        emissive: new THREE.Color(0xffffff),  // Pure white emissive
+        emissiveIntensity: baseIntensity,
+        roughness: 1.0,
+        metalness: 0.0,
+      });
+
+      // IMPORTANT: don't let ACES tone mapping "grey" it out
+      baseMaterial.toneMapped = false;
+
+      // Ensure it never gets environment tint
+      baseMaterial.envMap = null;
+      baseMaterial.envMapIntensity = 0.0;
+
+      // Avoid coplanar shimmer/z artifacts if it shares geometry
+      // Use stronger polygonOffset to push base layer behind artwork
+      baseMaterial.polygonOffset = true;
+      baseMaterial.polygonOffsetFactor = 2;  // Increased to push back more
+      baseMaterial.polygonOffsetUnits = 2;   // Increased to push back more
+
+      // Transparency settings (keep solid white)
+      baseMaterial.transparent = false;
+      baseMaterial.opacity = 1.0;
+
+      // Depth: write to depth buffer so it's visible, polygonOffset pushes it behind artwork
+      baseMaterial.depthWrite = true;  // Must be true for base layer to be visible
+      baseMaterial.depthTest = true;
+      baseMaterial.side = THREE.DoubleSide;
+
+      const baseMesh = new THREE.Mesh(parentMesh.geometry, baseMaterial);
+      baseMesh.name = `AcrylicBase_${parentMesh.name || ""}`;
+      // Lower renderOrder ensures it renders before the artwork (in opaque pass)
+      baseMesh.renderOrder = (parentMesh.renderOrder || 0) - 1;
+      baseMesh.visible = true;  // Explicitly ensure it's visible
+      baseMesh.userData = {
+        ...(baseMesh.userData || {}),
+        isAcrylicEmissiveBase: true,
+      };
+
+      // Position the base layer slightly behind the artwork mesh (thin like paper)
+      // Use a small offset to ensure it's behind the artwork surface
+      const offset = 0.001;  // Increased from 0.0001 to ensure visibility
+      // Offset in local Z direction (backward) - this works for most artwork meshes
+      baseMesh.position.set(0, 0, -offset);
+
+      // Attach as a child so visibility follows the artwork mesh
+      // and it never extends to the physical back meshes.
+      parentMesh.add(baseMesh);
+
+      // Ensure parent is visible so base layer is visible too
+      if (!parentMesh.visible) {
+        console.warn('[AcrylicBase] Parent mesh is not visible:', parentMesh.name);
+      }
+      console.log('[AcrylicBase] Created base layer for:', parentMesh.name, 'baseMesh name:', baseMesh.name);
+    });
+
+    const createdCount = meshes.filter((info) => {
+      const meshType = info.meshType;
+      const isArtworkMesh = meshType === "fullBleed" || meshType === "shrunk";
+      const isAcrylicSubstrateMesh = meshType === "acrylicFullBleed" || meshType === "acrylicShrunk";
+      return (isArtworkMesh || isAcrylicSubstrateMesh) && info.mesh && info.mesh.children &&
+        info.mesh.children.some(child => child.userData && child.userData.isAcrylicEmissiveBase);
+    }).length;
+
+    console.log('[AcrylicBase] Completed. Created base layers for', createdCount, 'meshes');
+  };
 
   // Set material type from prop
   useEffect(() => {
@@ -102,15 +399,15 @@ export function useArtworkViewer({
       outputColorSpace: THREE[SCENE_CONFIG.renderer.outputColorSpace],
       initialCameraPosition: sceneConfig?.cameraPosition
         ? new THREE.Vector3(
-            sceneConfig.cameraPosition.x,
-            sceneConfig.cameraPosition.y,
-            sceneConfig.cameraPosition.z
-          )
+          sceneConfig.cameraPosition.x,
+          sceneConfig.cameraPosition.y,
+          sceneConfig.cameraPosition.z
+        )
         : new THREE.Vector3(
-            SCENE_CONFIG.camera.initialPosition.x,
-            SCENE_CONFIG.camera.initialPosition.y,
-            SCENE_CONFIG.camera.initialPosition.z
-          ),
+          SCENE_CONFIG.camera.initialPosition.x,
+          SCENE_CONFIG.camera.initialPosition.y,
+          SCENE_CONFIG.camera.initialPosition.z
+        ),
     });
     sceneManagerRef.current = sceneManager;
     sceneManager.setToneMappingExposure(lighting.exposure);
@@ -144,15 +441,32 @@ export function useArtworkViewer({
         hdriPath,
         (newEnvMap) => {
           const model = modelManager.getModel();
-          if (model && materialType.materialModuleRef.current?.updateMaterials) {
+          if (model && materialType.materialModuleRef.current) {
             const activeType = materialType.activeMaterialTypeRef.current;
-            materialType.materialModuleRef.current.updateMaterials(
-              model,
-              newEnvMap,
-              lighting.showReflections,
-              lighting.reflectionIntensity,
-              materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
-            );
+            const materialModule = materialType.materialModuleRef.current;
+
+            // For acrylics: apply matte to artwork, glossy to glass
+            if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy) {
+              materialModule.applyArtworkMatteGlassGlossy(
+                model,
+                newEnvMap,
+                lighting.reflectionIntensity
+              );
+              // Enforce overrides in case global updates touched them
+              enforceAcrylicArtworkMatteGlassGlossy(
+                model,
+                newEnvMap,
+                lighting.reflectionIntensity
+              );
+            } else if (materialModule.updateMaterials) {
+              materialModule.updateMaterials(
+                model,
+                newEnvMap,
+                lighting.showReflections,
+                lighting.reflectionIntensity,
+                materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+              );
+            }
           }
         },
         (err) => {
@@ -205,11 +519,11 @@ export function useArtworkViewer({
 
             // Collect meshes
             const meshList = meshVisibilityManager.collectMeshes(model);
-            
+
             // Apply visibility relationships for all materials (including metals)
             // Metals follow the same rules: fullBleed ON → shrunk/frame OFF, shrunk ON → frame ON, fullBleed OFF
             meshVisibilityManager.applyVisibilityRelationships();
-            
+
             meshVisibilityHook.setMeshes(meshList);
 
             // Process materials
@@ -220,7 +534,7 @@ export function useArtworkViewer({
               reflectionIntensity: lighting.reflectionIntensity,
               meshVisibilityManager: meshVisibilityManager,
             };
-            
+
             const { materialDetails, textureLayers: layers } =
               materialProcessorRef.current.processModelMaterials(model, processOptions);
 
@@ -233,7 +547,7 @@ export function useArtworkViewer({
             const isMetal = activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX";
             const isMirror = activeMaterialType === "MIRROR";
             const isAcrylic = activeMaterialType === "ACRYLIC";
-            
+
             let filteredLayers;
             if (isMetal || isMirror || isAcrylic) {
               // For metals, mirrors, and acrylics: show all texture layers, no filtering
@@ -260,14 +574,42 @@ export function useArtworkViewer({
 
             textureLayersHook.setTextureLayers(filteredLayers);
 
+            // For acrylics, add a super‑white emissive base under the artwork surfaces
+            addAcrylicEmissiveBaseLayers(meshVisibilityManager, activeMaterialType);
+
+            // For acrylics, enforce matte artwork / glossy glass after all material updates
+            if (activeMaterialType === "ACRYLIC") {
+              const envMap = environmentManager.getEnvironmentMap();
+              enforceAcrylicArtworkMatteGlassGlossy(
+                model,
+                envMap,
+                lighting.reflectionIntensity
+              );
+            }
+
+            // For mirrors: upgrade mirror planes (Mirror_FullBleed / Mirror_Shrunk) to real planar reflectors
+            if (activeMaterialType === "MIRROR") {
+              createMirrorReflectors(model, { textureSize: 1024 });
+              syncMirrorReflectorVisibility(model, currentMode);
+            }
+
             // Apply initial mode
             if (modeProp) {
               setMode(modeProp);
             }
 
-            // Update materials with environment map (skip for acrylics - render as-is)
+            // Update materials with environment map
             const envMap = environmentManager.getEnvironmentMap();
-            if (envMap && materialModule.updateMaterials && activeMaterialType !== "ACRYLIC") {
+            if (activeMaterialType === "ACRYLIC") {
+              // For acrylics: apply matte to artwork, glossy to glass
+              if (materialModule.applyArtworkMatteGlassGlossy && envMap) {
+                materialModule.applyArtworkMatteGlassGlossy(
+                  model,
+                  envMap,
+                  lighting.reflectionIntensity
+                );
+              }
+            } else if (envMap && materialModule.updateMaterials) {
               materialModule.updateMaterials(
                 model,
                 envMap,
@@ -318,6 +660,26 @@ export function useArtworkViewer({
     materialType,
     lighting,
   });
+
+  // Re‑enforce acrylic overrides whenever lighting / reflections change
+  useEffect(() => {
+    const activeType = materialType.activeMaterialTypeRef.current;
+    if (activeType !== "ACRYLIC") return;
+
+    const model = modelManagerRef.current?.getModel();
+    const envMap = environmentManagerRef.current?.getEnvironmentMap();
+    if (!model) return;
+
+    enforceAcrylicArtworkMatteGlassGlossy(
+      model,
+      envMap,
+      lighting.reflectionIntensity
+    );
+  }, [
+    lighting.reflectionIntensity,
+    lighting.showReflections,
+    materialType.activeMaterialType,
+  ]);
 
   // Texture operations
   const textureOperations = useTextureOperations({
@@ -372,6 +734,12 @@ export function useArtworkViewer({
     // This will handle all background meshes (Wood_FullBleed, Wood_Shrunk, etc.)
     meshVisibilityManagerRef.current.applyVisibilityRelationships();
 
+    // Keep mirror reflectors in sync with mode when in MIRROR material type
+    if (materialType.activeMaterialTypeRef.current === "MIRROR") {
+      const model = modelManagerRef.current?.getModel();
+      syncMirrorReflectorVisibility(model, newMode);
+    }
+
     setCurrentMode(newMode);
     if (onModeChange) onModeChange(newMode);
   };
@@ -380,20 +748,20 @@ export function useArtworkViewer({
   const updateArtwork = async (texturePath, mode = null) => {
     const targetMode = mode || currentMode;
     const allLayers = textureLayersHook.allTextureLayersRef.current || [];
-    
+
     console.log('updateArtwork called:', {
       targetMode,
       totalLayers: allLayers.length,
       availableMeshTypes: allLayers.map(l => ({ name: l.meshName, type: l.meshType }))
     });
-    
+
     const layer = findArtworkTextureLayer(allLayers, targetMode);
 
     if (!layer) {
       console.warn(`No artwork layer found for mode: ${targetMode}. Available layers:`, allLayers.map(l => ({ name: l.meshName, type: l.meshType })));
       return false;
     }
-    
+
     console.log('Found layer for texture application:', {
       meshName: layer.meshName,
       meshType: layer.meshType,
@@ -436,7 +804,7 @@ export function useArtworkViewer({
           const isMirror = materialType.activeMaterialTypeRef.current === "MIRROR";
           const isWood = materialType.activeMaterialTypeRef.current === "WOOD";
           const isAcrylic = materialType.activeMaterialTypeRef.current === "ACRYLIC";
-          
+
           // For metals, apply texture to Artwork_FullBleed and Artwork_Shrunk (like acrylic)
           // No white color removal - using PNGs now
           const isFullBleed = layer.meshType === "fullBleed";
@@ -452,10 +820,10 @@ export function useArtworkViewer({
             } else {
               // Skip other mesh types for metals
               console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for metals. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
-                  resolve(false);
-                  return;
+              resolve(false);
+              return;
             }
-            
+
             // For metals: just apply the texture directly, no processing (PNGs now, no white removal)
             // Dispose old texture to prevent remnants
             const originalTex = textureLayersHook.getOriginalTexture(layerId);
@@ -467,17 +835,17 @@ export function useArtworkViewer({
             const clonedTex = textureManagerRef.current
               ? textureManagerRef.current.createTextureFromImage(texture.image, { flipY: false })
               : (() => {
-                  const tex = new THREE.Texture(texture.image);
-                  tex.wrapS = THREE.ClampToEdgeWrapping;
-                  tex.wrapT = THREE.ClampToEdgeWrapping;
-                  tex.generateMipmaps = false;
-                  tex.minFilter = THREE.LinearFilter;
-                  tex.magFilter = THREE.LinearFilter;
-                  tex.colorSpace = THREE.SRGBColorSpace;
-                  tex.flipY = false;
-                  tex.needsUpdate = true;
-                  return tex;
-                })();
+                const tex = new THREE.Texture(texture.image);
+                tex.wrapS = THREE.ClampToEdgeWrapping;
+                tex.wrapT = THREE.ClampToEdgeWrapping;
+                tex.generateMipmaps = false;
+                tex.minFilter = THREE.LinearFilter;
+                tex.magFilter = THREE.LinearFilter;
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.flipY = false;
+                tex.needsUpdate = true;
+                return tex;
+              })();
 
             mat.map = clonedTex;
 
@@ -489,7 +857,7 @@ export function useArtworkViewer({
               const scene = sceneManagerRef.current?.getScene();
               const meshNameLower = (layer.meshName || "").toLowerCase();
               const activeType = materialType.activeMaterialTypeRef.current;
-              
+
               // First, detect metal type from scene meshes (more reliable than materialType)
               let detectedMetalType = null;
               if (scene) {
@@ -504,32 +872,32 @@ export function useArtworkViewer({
                   }
                 });
               }
-              
+
               // Use detected type from scene if available, otherwise fall back to activeType
               const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (activeType === "METAL" || meshNameLower.includes("silver")));
               const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (activeType === "METAL_BOX" || meshNameLower.includes("white")));
-              
+
               console.log(`[Metal PBR] MaterialType: ${activeType}, DetectedMetalType: ${detectedMetalType}, isSilver: ${isSilver}, isWhite: ${isWhite}, meshName: ${layer.meshName}`);
-              
+
               if (scene) {
                 scene.traverse((obj) => {
                   if (obj.isMesh && obj.material) {
                     const objNameLower = (obj.name || "").toLowerCase();
-                    
+
                     // Always find FullBleed for color (ensures consistency)
                     if (!metalMatForColor) {
                       let shouldMatchFullBleed = false;
                       if (isSilver) {
-                        shouldMatchFullBleed = objNameLower.includes("silver") && 
-                                               (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                               !objNameLower.includes("artwork");
+                        shouldMatchFullBleed = objNameLower.includes("silver") &&
+                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                          !objNameLower.includes("artwork");
                       } else if (isWhite) {
                         // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-                        shouldMatchFullBleed = objNameLower.includes("white") && 
-                                               (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                               !objNameLower.includes("artwork");
+                        shouldMatchFullBleed = objNameLower.includes("white") &&
+                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                          !objNameLower.includes("artwork");
                       }
-                      
+
                       if (shouldMatchFullBleed) {
                         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
                         mats.forEach((m) => {
@@ -540,34 +908,34 @@ export function useArtworkViewer({
                         });
                       }
                     }
-                    
+
                     // Find corresponding mesh for PBR maps (fullBleed or shrunk)
                     if (!metalMatForMaps) {
                       let shouldMatch = false;
-                if (isFullBleed) {
+                      if (isFullBleed) {
                         if (isSilver) {
-                          shouldMatch = objNameLower.includes("silver") && 
-                                       (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                       !objNameLower.includes("artwork");
+                          shouldMatch = objNameLower.includes("silver") &&
+                            (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                            !objNameLower.includes("artwork");
                         } else if (isWhite) {
                           // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-                          shouldMatch = objNameLower.includes("white") && 
-                                       (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                       !objNameLower.includes("artwork");
-                  }
-                } else if (isShrunk) {
+                          shouldMatch = objNameLower.includes("white") &&
+                            (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                            !objNameLower.includes("artwork");
+                        }
+                      } else if (isShrunk) {
                         if (isSilver) {
-                          shouldMatch = objNameLower.includes("silver") && 
-                                       (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                                       !objNameLower.includes("artwork");
+                          shouldMatch = objNameLower.includes("silver") &&
+                            (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                            !objNameLower.includes("artwork");
                         } else if (isWhite) {
                           // Match Metal_White_Shrunk - simplified like silver (just check for "white")
-                          shouldMatch = objNameLower.includes("white") && 
-                                       (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                                       !objNameLower.includes("artwork");
+                          shouldMatch = objNameLower.includes("white") &&
+                            (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                            !objNameLower.includes("artwork");
                         }
                       }
-                      
+
                       if (shouldMatch) {
                         console.log(`[Metal PBR] Found matching mesh: ${obj.name}`);
                         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -578,11 +946,11 @@ export function useArtworkViewer({
                           }
                         });
                       }
-                      }
                     }
-                  });
+                  }
+                });
               }
-              
+
               // Copy brushed metal finish if found
               if (metalMatForMaps || metalMatForColor) {
                 // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
@@ -608,11 +976,11 @@ export function useArtworkViewer({
                   if (metalMatForMaps.emissiveMap) {
                     mat.emissiveMap = metalMatForMaps.emissiveMap;
                   }
-                  
+
                   // Set material properties for metallic brushed finish
                   mat.metalness = 1.0; // Make it metallic
                   mat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 0.75; // Use frame's roughness (brushed: 0.75)
-                  
+
                   // Copy environment map and intensity for reflections
                   if (metalMatForMaps.envMap) {
                     mat.envMap = metalMatForMaps.envMap;
@@ -621,7 +989,7 @@ export function useArtworkViewer({
                     mat.envMapIntensity = metalMatForMaps.envMapIntensity;
                   }
                 }
-                
+
                 // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
                 if (metalMatForColor && metalMatForColor.color) {
                   mat.color.copy(metalMatForColor.color);
@@ -634,10 +1002,10 @@ export function useArtworkViewer({
                 mat.metalness = 1.0;
                 mat.roughness = 0.75; // Default to brushed finish
               }
-              
+
               // Apply minimal transparency settings (matching working test app)
-            mat.transparent = true;
-            mat.opacity = 1.0;
+              mat.transparent = true;
+              mat.opacity = 1.0;
               mat.alphaTest = 0.001; // Very small alpha test (matches working app)
               mat.depthWrite = true; // Proper depth rendering (matches working app)
               // Don't set side property - let material use its original setting
@@ -656,7 +1024,7 @@ export function useArtworkViewer({
               resolve(false);
               return;
             }
-            
+
             // For mirrors: just apply the texture directly, no processing (PNGs now, no white removal)
             // Dispose old texture to prevent remnants
             const originalTex = textureLayersHook.getOriginalTexture(layerId);
@@ -668,17 +1036,17 @@ export function useArtworkViewer({
             const clonedTex = textureManagerRef.current
               ? textureManagerRef.current.createTextureFromImage(texture.image, { flipY: false })
               : (() => {
-                  const tex = new THREE.Texture(texture.image);
-                  tex.wrapS = THREE.ClampToEdgeWrapping;
-                  tex.wrapT = THREE.ClampToEdgeWrapping;
-                  tex.generateMipmaps = false;
-                  tex.minFilter = THREE.LinearFilter;
-                  tex.magFilter = THREE.LinearFilter;
-                  tex.colorSpace = THREE.SRGBColorSpace;
-                  tex.flipY = false;
-                  tex.needsUpdate = true;
-                  return tex;
-                })();
+                const tex = new THREE.Texture(texture.image);
+                tex.wrapS = THREE.ClampToEdgeWrapping;
+                tex.wrapT = THREE.ClampToEdgeWrapping;
+                tex.generateMipmaps = false;
+                tex.minFilter = THREE.LinearFilter;
+                tex.magFilter = THREE.LinearFilter;
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.flipY = false;
+                tex.needsUpdate = true;
+                return tex;
+              })();
 
             mat.map = clonedTex;
 
@@ -688,7 +1056,7 @@ export function useArtworkViewer({
               if (!textureLayersHook.getOriginalMaterialProperties(layerId)) {
                 textureLayersHook.storeOriginalMaterialProperties(layerId, mat);
               }
-              
+
               // Remove any reflection-related maps
               mat.normalMap = null;
               mat.roughnessMap = null;
@@ -698,18 +1066,24 @@ export function useArtworkViewer({
               mat.clearcoatRoughnessMap = null;
               mat.sheenColorMap = null;
               mat.sheenRoughnessMap = null;
-              
+
+              // Make it brighter but still matte + non‑reflective
+              if (mat.color) {
+                // Slightly “hotter” than pure white; tweak 1.1–1.3 to taste
+                mat.color.setRGB(3.0, 3.0, 3.0);
+              }
+
               // Set matte properties: high roughness (matte), low metalness, minimal reflection
               mat.roughness = 0.95; // Very matte (high roughness = less reflective)
               mat.metalness = 0.0; // Non-metallic
               mat.envMapIntensity = 0.1; // Very low environment map intensity (minimal reflection)
-              
+
               // Keep useful maps if they exist (AO, emissive, etc.)
               // But remove reflection-related ones
-              
+
               console.log(`Set matte properties for mirror artwork layer: "${layer.meshName}" (roughness: ${mat.roughness}, envMapIntensity: ${mat.envMapIntensity})`);
             }
-            
+
             // Enable transparency for PNG textures (alpha channel support)
             mat.transparent = true;
             mat.opacity = 1.0;
@@ -727,57 +1101,33 @@ export function useArtworkViewer({
             }
 
             // Check if we need to apply white color removal for Artwork_FullBleed or Wood_FullBleed in wood mode
-            const isArtworkFullBleed = layer.meshType === "fullBleed" || 
-                                     (layer.meshName && layer.meshName.toLowerCase().includes("artwork") && 
-                                      (layer.meshName.toLowerCase().includes("fullbleed") || layer.meshName.toLowerCase().includes("full_bleed")));
-            const isWoodFullBleed = layer.meshName && layer.meshName.toLowerCase().includes("wood") && 
-                                   (layer.meshName.toLowerCase().includes("fullbleed") || layer.meshName.toLowerCase().includes("full_bleed"));
+            const isArtworkFullBleed = layer.meshType === "fullBleed" ||
+              (layer.meshName && layer.meshName.toLowerCase().includes("artwork") &&
+                (layer.meshName.toLowerCase().includes("fullbleed") || layer.meshName.toLowerCase().includes("full_bleed")));
+            const isWoodFullBleed = layer.meshName && layer.meshName.toLowerCase().includes("wood") &&
+              (layer.meshName.toLowerCase().includes("fullbleed") || layer.meshName.toLowerCase().includes("full_bleed"));
             const isFullBleedMesh = isArtworkFullBleed || isWoodFullBleed;
-            
-            // For acrylic: Composite white base with artwork texture
+
             let processedImage = texture.image;
-            
-            if (isAcrylic && (isFullBleed || isShrunk)) {
-              // Create a composite texture with white base and artwork on top
-              const canvas = document.createElement('canvas');
-              const ctx = canvas.getContext('2d');
-              
-              // Get image dimensions
-              const img = texture.image;
-              const width = img.width || img.naturalWidth || 2048;
-              const height = img.height || img.naturalHeight || 2048;
-              
-              canvas.width = width;
-              canvas.height = height;
-              
-              // Draw white background first
-              ctx.fillStyle = '#FFFFFF';
-              ctx.fillRect(0, 0, width, height);
-              
-              // Draw artwork texture on top (preserving alpha)
-              ctx.drawImage(img, 0, 0, width, height);
-              
-              processedImage = canvas;
-            }
-            
+
             // For wood: Copy wood texture properties from corresponding wood background mesh
             if (isWood && (isFullBleed || isShrunk)) {
               // Find the corresponding wood background mesh (Wood_FullBleed or Wood_Shrunk)
               let woodMatForColor = null; // Always from FullBleed for color consistency
               let woodMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
               const scene = sceneManagerRef.current?.getScene();
-              
+
               if (scene) {
                 scene.traverse((obj) => {
                   if (obj.isMesh && obj.material) {
                     const objNameLower = (obj.name || "").toLowerCase();
-                    
+
                     // Always find FullBleed for color (ensures consistency)
                     if (!woodMatForColor) {
-                      const shouldMatchFullBleed = objNameLower.includes("wood") && 
-                                                  (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                                  !objNameLower.includes("artwork");
-                      
+                      const shouldMatchFullBleed = objNameLower.includes("wood") &&
+                        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                        !objNameLower.includes("artwork");
+
                       if (shouldMatchFullBleed) {
                         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
                         mats.forEach((m) => {
@@ -788,20 +1138,20 @@ export function useArtworkViewer({
                         });
                       }
                     }
-                    
+
                     // Find corresponding mesh for PBR maps (fullBleed or shrunk)
                     if (!woodMatForMaps) {
                       let shouldMatch = false;
-                if (isFullBleed) {
-                        shouldMatch = objNameLower.includes("wood") && 
-                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                     !objNameLower.includes("artwork");
-                } else if (isShrunk) {
-                        shouldMatch = objNameLower.includes("wood") && 
-                                     (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                                     !objNameLower.includes("artwork");
+                      if (isFullBleed) {
+                        shouldMatch = objNameLower.includes("wood") &&
+                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                          !objNameLower.includes("artwork");
+                      } else if (isShrunk) {
+                        shouldMatch = objNameLower.includes("wood") &&
+                          (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                          !objNameLower.includes("artwork");
                       }
-                      
+
                       if (shouldMatch) {
                         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
                         mats.forEach((m) => {
@@ -815,7 +1165,7 @@ export function useArtworkViewer({
                   }
                 });
               }
-              
+
               // Copy wood texture properties if found
               if (woodMatForMaps || woodMatForColor) {
                 // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
@@ -841,7 +1191,7 @@ export function useArtworkViewer({
                   if (woodMatForMaps.emissiveMap) {
                     mat.emissiveMap = woodMatForMaps.emissiveMap;
                   }
-                  
+
                   // Copy material properties for wood finish
                   if (woodMatForMaps.roughness !== undefined) {
                     mat.roughness = woodMatForMaps.roughness;
@@ -849,7 +1199,7 @@ export function useArtworkViewer({
                   if (woodMatForMaps.metalness !== undefined) {
                     mat.metalness = woodMatForMaps.metalness;
                   }
-                  
+
                   // Copy environment map and intensity for reflections
                   if (woodMatForMaps.envMap) {
                     mat.envMap = woodMatForMaps.envMap;
@@ -858,7 +1208,7 @@ export function useArtworkViewer({
                     mat.envMapIntensity = woodMatForMaps.envMapIntensity;
                   }
                 }
-                
+
                 // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
                 if (woodMatForColor && woodMatForColor.color) {
                   mat.color.copy(woodMatForColor.color);
@@ -867,7 +1217,7 @@ export function useArtworkViewer({
                   mat.color.copy(woodMatForMaps.color);
                 }
               }
-              
+
               // Apply minimal transparency settings (matching working test app, same as metals)
               mat.transparent = true;
               mat.opacity = 1.0;
@@ -880,16 +1230,16 @@ export function useArtworkViewer({
             const clonedTex = textureManagerRef.current
               ? textureManagerRef.current.createTextureFromImage(processedImage, { flipY: false })
               : (() => {
-                  const tex = new THREE.Texture(processedImage);
-                  tex.wrapS = THREE.ClampToEdgeWrapping;
-                  tex.wrapT = THREE.ClampToEdgeWrapping;
-                  tex.generateMipmaps = false;
-                  tex.minFilter = THREE.LinearFilter;
-                  tex.magFilter = THREE.LinearFilter;
-                  tex.colorSpace = THREE.SRGBColorSpace;
-                  tex.needsUpdate = true;
-                  return tex;
-                })();
+                const tex = new THREE.Texture(processedImage);
+                tex.wrapS = THREE.ClampToEdgeWrapping;
+                tex.wrapT = THREE.ClampToEdgeWrapping;
+                tex.generateMipmaps = false;
+                tex.minFilter = THREE.LinearFilter;
+                tex.magFilter = THREE.LinearFilter;
+                tex.colorSpace = THREE.SRGBColorSpace;
+                tex.needsUpdate = true;
+                return tex;
+              })();
 
             mat.map = clonedTex;
 
@@ -904,6 +1254,24 @@ export function useArtworkViewer({
           const renderer = sceneManagerRef.current?.getRenderer();
           if (renderer && scene && camera) {
             renderer.render(scene, camera);
+          }
+
+          // For acrylics: Ensure super-white emissive base layer exists after texture update
+          // This is critical for API mode where textures are applied after initial setup
+          if (isAcrylic && meshVisibilityManagerRef.current) {
+            const activeMaterialType = materialType.activeMaterialTypeRef.current;
+            addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
+
+            // Also re-enforce matte artwork / glossy glass after artwork update
+            const model = modelManagerRef.current?.getModel();
+            const envMap = environmentManagerRef.current?.getEnvironmentMap();
+            if (model) {
+              enforceAcrylicArtworkMatteGlassGlossy(
+                model,
+                envMap,
+                lighting.reflectionIntensity
+              );
+            }
           }
 
           if (onTextureUpdate) {
@@ -943,19 +1311,19 @@ export function useArtworkViewer({
 
     // Restore original texture
     mat[layer.mapType] = originalTex;
-    
+
     // For mirror materials: also restore original material properties
     const isMirror = materialType.activeMaterialTypeRef.current === "MIRROR";
     const isFullBleed = layer.meshType === "fullBleed";
     const isShrunk = layer.meshType === "shrunk";
-    
+
     if (isMirror && (isFullBleed || isShrunk)) {
       const restored = textureLayersHook.restoreOriginalMaterialProperties(layer.id, mat);
       if (restored) {
         console.log(`Restored original material properties for mirror artwork layer: "${layer.meshName}"`);
       }
     }
-    
+
     mat.needsUpdate = true;
 
     // Force render
@@ -1041,17 +1409,17 @@ export function useArtworkViewer({
     const newTexture = textureManagerRef.current
       ? textureManagerRef.current.createTextureFromImage(transformedCanvas, { flipY: false })
       : (() => {
-          const tex = new THREE.Texture(transformedCanvas);
-          tex.wrapS = THREE.ClampToEdgeWrapping;
-          tex.wrapT = THREE.ClampToEdgeWrapping;
-          tex.generateMipmaps = false;
-          tex.minFilter = THREE.LinearFilter;
-          tex.magFilter = THREE.LinearFilter;
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.flipY = false;
-          tex.needsUpdate = true;
-          return tex;
-        })();
+        const tex = new THREE.Texture(transformedCanvas);
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.flipY = false;
+        tex.needsUpdate = true;
+        return tex;
+      })();
 
     mat.map = newTexture;
     mat.needsUpdate = true;
@@ -1071,7 +1439,7 @@ export function useArtworkViewer({
   const getMaterialSummary = () => {
     const meshes = meshVisibilityManagerRef.current?.getMeshes() || [];
     const layers = textureLayersHook.allTextureLayersRef.current || [];
-    
+
     const byType = {};
     let totalMaterials = 0;
 
@@ -1102,7 +1470,7 @@ export function useArtworkViewer({
   // ============================================
   // SIMPLIFIED API FUNCTIONS
   // ============================================
-  
+
   // Setup function - initialize everything
   const setup = async (options = {}) => {
     const {
@@ -1126,7 +1494,7 @@ export function useArtworkViewer({
         }
 
         const model = modelManagerRef.current.getModel();
-        
+
         // Remove existing model if present
         if (model) {
           modelManagerRef.current.removeModel();
@@ -1181,10 +1549,10 @@ export function useArtworkViewer({
 
               // Collect meshes
               const meshList = meshVisibilityManagerRef.current.collectMeshes(loadedModel);
-              
+
               // Apply visibility relationships
               meshVisibilityManagerRef.current.applyVisibilityRelationships();
-              
+
               meshVisibilityHook.setMeshes(meshList);
 
               // Process materials (this creates texture layers)
@@ -1195,7 +1563,7 @@ export function useArtworkViewer({
                 reflectionIntensity: lighting.reflectionIntensity,
                 meshVisibilityManager: meshVisibilityManagerRef.current,
               };
-              
+
               const { materialDetails, textureLayers: layers } =
                 materialProcessorRef.current.processModelMaterials(loadedModel, processOptions);
 
@@ -1207,7 +1575,7 @@ export function useArtworkViewer({
               const isMetal = activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX";
               const isMirror = activeMaterialType === "MIRROR";
               const isAcrylic = activeMaterialType === "ACRYLIC";
-              
+
               let filteredLayers;
               if (isMetal || isMirror || isAcrylic) {
                 filteredLayers = layers;
@@ -1220,9 +1588,21 @@ export function useArtworkViewer({
 
               textureLayersHook.setTextureLayers(filteredLayers);
 
+              // For acrylics, add a super‑white emissive base under the artwork surfaces
+              addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
+
               // Update materials with environment map
               const envMap = environmentManagerRef.current?.getEnvironmentMap();
-              if (envMap && materialModule.updateMaterials && activeMaterialType !== "ACRYLIC") {
+              if (activeMaterialType === "ACRYLIC") {
+                // For acrylics: apply matte to artwork, glossy to glass
+                if (materialModule.applyArtworkMatteGlassGlossy && envMap) {
+                  materialModule.applyArtworkMatteGlassGlossy(
+                    loadedModel,
+                    envMap,
+                    lighting.reflectionIntensity
+                  );
+                }
+              } else if (envMap && materialModule.updateMaterials) {
                 materialModule.updateMaterials(
                   loadedModel,
                   envMap,
@@ -1238,8 +1618,14 @@ export function useArtworkViewer({
           );
         });
       } else if (newMaterialType) {
-        // If only material type changed, wait for processing
+        // If only material type changed (no new model), wait for processing
         await new Promise(resolve => setTimeout(resolve, 300));
+
+        // Ensure acrylic emissive base exists in this path as well
+        const activeMaterialType = newMaterialType || materialType.activeMaterialType;
+        if (meshVisibilityManagerRef.current && activeMaterialType === "ACRYLIC") {
+          addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
+        }
       } else {
         // Just wait for any pending operations
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -1349,17 +1735,17 @@ export function useArtworkViewer({
           const clonedTex = textureManagerRef.current
             ? textureManagerRef.current.createTextureFromImage(texture.image, { flipY: false })
             : (() => {
-                const tex = new THREE.Texture(texture.image);
-                tex.wrapS = THREE.ClampToEdgeWrapping;
-                tex.wrapT = THREE.ClampToEdgeWrapping;
-                tex.generateMipmaps = false;
-                tex.minFilter = THREE.LinearFilter;
-                tex.magFilter = THREE.LinearFilter;
-                tex.colorSpace = THREE.SRGBColorSpace;
-                tex.flipY = false;
-                tex.needsUpdate = true;
-                return tex;
-              })();
+              const tex = new THREE.Texture(texture.image);
+              tex.wrapS = THREE.ClampToEdgeWrapping;
+              tex.wrapT = THREE.ClampToEdgeWrapping;
+              tex.generateMipmaps = false;
+              tex.minFilter = THREE.LinearFilter;
+              tex.magFilter = THREE.LinearFilter;
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.flipY = false;
+              tex.needsUpdate = true;
+              return tex;
+            })();
 
           mat.map = clonedTex;
           mat.needsUpdate = true;
@@ -1396,31 +1782,31 @@ export function useArtworkViewer({
      * @param {string} options.mode - Optional: Initial mode ('fullBleed' or 'shrunk', default: 'fullBleed')
      */
     setup,
-    
+
     /**
      * Set mode - Switch between fullBleed and shrunk
      * @param {string} mode - 'fullBleed' or 'shrunk'
      */
     setMode,
-    
+
     /**
      * Get current mode
      * @returns {string} Current mode ('fullBleed' or 'shrunk')
      */
     getMode: () => currentMode,
-    
+
     /**
      * Update artwork texture - Applies to both fullBleed and shrunk modes
      * @param {string} texturePath - Path to artwork texture
      */
     updateArtwork: updateArtworkSimple,
-    
+
     /**
      * Update frame texture - Applies to Frame_Edge mesh (for shrunk mode)
      * @param {string} texturePath - Path to frame texture
      */
     updateFrame,
-    
+
     /**
      * Set material type
      * @param {string} type - Material type (ACRYLIC, METAL, METAL_BOX, WOOD, MIRROR)
@@ -1428,7 +1814,7 @@ export function useArtworkViewer({
     setMaterialType: (type) => {
       materialType.setSelectedMaterialType(type);
     },
-    
+
     // ============================================
     // MODE CONTROL (keep for backward compatibility)
     // ============================================
@@ -1522,7 +1908,7 @@ export function useArtworkViewer({
         // Apply relationships if needed
         if (meshVisibilityManagerRef.current) {
           meshVisibilityManagerRef.current.applyVisibilityRelationships();
-          
+
           // Update texture layers based on new mesh visibility
           const allLayers = textureLayersHook.allTextureLayersRef.current || [];
           const currentMaterialType = materialType.activeMaterialTypeRef.current;
@@ -1539,7 +1925,7 @@ export function useArtworkViewer({
       if (!meshVisibilityManagerRef.current) return;
       const updatedMeshes = meshVisibilityManagerRef.current.toggleMeshVisibility(meshId);
       meshVisibilityHook.setMeshes(updatedMeshes);
-      
+
       // Update texture layers based on new mesh visibility
       const allLayers = textureLayersHook.allTextureLayersRef.current || [];
       const currentMaterialType = materialType.activeMaterialTypeRef.current;
@@ -1548,7 +1934,7 @@ export function useArtworkViewer({
         currentMaterialType
       );
       textureLayersHook.setTextureLayers(filteredLayers);
-      
+
       forceRender();
       return updatedMeshes;
     },
@@ -1569,7 +1955,7 @@ export function useArtworkViewer({
       });
       // Apply relationships after batch update
       meshVisibilityManagerRef.current.applyVisibilityRelationships();
-      
+
       // Update texture layers based on new mesh visibility
       const allLayers = textureLayersHook.allTextureLayersRef.current || [];
       const currentMaterialType = materialType.activeMaterialTypeRef.current;
@@ -1578,7 +1964,7 @@ export function useArtworkViewer({
         currentMaterialType
       );
       textureLayersHook.setTextureLayers(filteredLayers);
-      
+
       forceRender();
     },
     // ============================================
@@ -1596,7 +1982,7 @@ export function useArtworkViewer({
     applyVisibilityRelationships: () => {
       if (meshVisibilityManagerRef.current) {
         meshVisibilityManagerRef.current.applyVisibilityRelationships();
-        
+
         // Update texture layers based on new mesh visibility
         const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const currentMaterialType = materialType.activeMaterialTypeRef.current;
@@ -1605,7 +1991,7 @@ export function useArtworkViewer({
           currentMaterialType
         );
         textureLayersHook.setTextureLayers(filteredLayers);
-        
+
         forceRender();
       }
     },
@@ -1692,7 +2078,7 @@ export function useArtworkViewer({
       const model = modelManagerRef.current?.getModel();
       const envMap = environmentManagerRef.current?.getEnvironmentMap();
       if (!model || !envMap || !materialProcessorRef.current) return;
-      
+
       const materialModule = materialType.materialModuleRef.current;
       if (materialModule && materialModule.updateMaterials) {
         const activeType = materialType.activeMaterialTypeRef.current;
@@ -1897,10 +2283,10 @@ export function useArtworkViewer({
       const model = modelManagerRef.current?.getModel();
       const bbox = modelManagerRef.current?.getBoundingBox();
       if (!model) return null;
-      
+
       const size = bbox ? bbox.getSize(new THREE.Vector3()) : null;
       const center = bbox ? bbox.getCenter(new THREE.Vector3()) : null;
-      
+
       return {
         name: model.name || "Model",
         uuid: model.uuid,
@@ -2036,7 +2422,7 @@ export function useArtworkViewer({
               reflectionIntensity: lighting.reflectionIntensity,
               meshVisibilityManager: meshVisibilityManagerRef.current,
             };
-            
+
             materialProcessorRef.current.processModelMaterials(model, processOptions);
             forceRender();
           }
@@ -2067,7 +2453,7 @@ export function useArtworkViewer({
     },
     updateCameraAndControls: (cameraPosition) => {
       if (modelManagerRef.current) {
-        const pos = cameraPosition 
+        const pos = cameraPosition
           ? new THREE.Vector3(cameraPosition.x, cameraPosition.y, cameraPosition.z)
           : undefined;
         modelManagerRef.current.updateCameraAndControls(pos);

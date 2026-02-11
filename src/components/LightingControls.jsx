@@ -54,6 +54,82 @@ export default function LightingControls({
         </div>
       ))}
 
+      {/* Acrylic-only: Super-white base brightness */}
+      {detectedMaterialType === "ACRYLIC" && (
+        <div style={{ marginTop: 8, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9 }}>
+            <span>White Base Brightness</span>
+            <span style={{ fontSize: 11, opacity: 0.7 }}>
+              {(lighting.acrylicBase ?? 1.5).toFixed(2)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0.5}
+            max={3.0}
+            step={0.01}
+            value={lighting.acrylicBase ?? 1.5}
+            onChange={(e) => {
+              const newValue = parseFloat(e.target.value);
+
+              // Update lighting state so value is persisted with lighting presets
+              if (onLightingChange) {
+                onLightingChange({ acrylicBase: newValue });
+              }
+
+              // Also directly update the acrylic base meshes in the scene
+              // For MeshStandardMaterial, we use emissiveIntensity
+              const scene = sceneManagerRef?.current?.getScene
+                ? sceneManagerRef.current.getScene()
+                : null;
+
+              if (scene) {
+                scene.traverse((obj) => {
+                  if (
+                    obj.isMesh &&
+                    obj.userData &&
+                    obj.userData.isAcrylicEmissiveBase &&
+                    obj.material
+                  ) {
+                    const mats = Array.isArray(obj.material)
+                      ? obj.material
+                      : [obj.material];
+                    mats.forEach((m) => {
+                      if (m) {
+                        // MeshStandardMaterial uses emissiveIntensity
+                        if (m.emissiveIntensity !== undefined) {
+                          m.emissiveIntensity = newValue;
+                          // Ensure toneMapped stays false to prevent greying
+                          m.toneMapped = false;
+                        } else if (m.isMeshBasicMaterial && m.color) {
+                          // Fallback for old MeshBasicMaterial (if any exist)
+                          m.color.setScalar(newValue);
+                        }
+                        m.needsUpdate = true;
+                      }
+                    });
+                  }
+                });
+
+                const renderer = sceneManagerRef.current?.getRenderer
+                  ? sceneManagerRef.current.getRenderer()
+                  : null;
+                const camera = sceneManagerRef.current?.getCamera
+                  ? sceneManagerRef.current.getCamera()
+                  : null;
+                if (renderer && camera) {
+                  renderer.render(scene, camera);
+                }
+              }
+            }}
+            style={{ width: "100%" }}
+          />
+          <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>
+            Controls brightness of the super-white backing layer under acrylic artwork
+          </div>
+        </div>
+      )}
+
       {/* Reflection Intensity Control */}
       <div style={{ marginTop: 16, marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, opacity: 0.9 }}>
