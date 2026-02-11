@@ -19,8 +19,13 @@ export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO fo
 // =========================
 export const MODEL_PATHS = {
   GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
+  // HDRI paths - use external URLs if Vercel 404s (due to file size limits)
+  // Option 1: Local paths (works locally, may 404 on Vercel for large files)
   HDRI: "/assets/hdr/studio3.hdr",
   HDRI_MIRROR: "/assets/hdr/studio2.hdr", // Special HDRI for mirror materials
+  // Option 2: External URLs (uncomment and use if local files 404 on Vercel)
+  // HDRI: "https://your-cdn.com/assets/hdr/studio3.hdr",
+  // HDRI_MIRROR: "https://your-cdn.com/assets/hdr/studio2.hdr",
   TEST_IMAGES: {
     IMAGE_1: "/assets/frames/image4.png",
     IMAGE_2: "/assets/frames/Image5.png",
