@@ -27,11 +27,15 @@ function App() {
   const [modelFile, setModelFile] = useState(null);
   const [artworkFile, setArtworkFile] = useState(null);
   const [frameFile, setFrameFile] = useState(null);
+  const [hdrFile, setHdrFile] = useState(null); // HDR for non-mirror materials
+  const [hdrMirrorFile, setHdrMirrorFile] = useState(null); // HDR for mirror material
   const [isLoading, setIsLoading] = useState(false);
 
   // Store blob URLs for texture loading (textures can use blob URLs)
   const [artworkUrl, setArtworkUrl] = useState(null);
   const [frameUrl, setFrameUrl] = useState(null);
+  const [hdrUrl, setHdrUrl] = useState(null); // HDR URL for non-mirror materials
+  const [hdrMirrorUrl, setHdrMirrorUrl] = useState(null); // HDR URL for mirror material
 
   // Handle file uploads
   const handleModelUpload = (e) => {
@@ -70,6 +74,34 @@ function App() {
     }
   };
 
+  const handleHdrUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Clean up old URL
+      if (hdrUrl) {
+        URL.revokeObjectURL(hdrUrl);
+      }
+      // Store File object directly - EnvironmentManager will handle it
+      setHdrFile(file);
+      setHdrUrl(null); // Don't create blob URL, pass File directly
+      setStatus(`HDR environment uploaded: ${file.name}`);
+    }
+  };
+
+  const handleHdrMirrorUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Clean up old URL
+      if (hdrMirrorUrl) {
+        URL.revokeObjectURL(hdrMirrorUrl);
+      }
+      // Store File object directly - EnvironmentManager will handle it
+      setHdrMirrorFile(file);
+      setHdrMirrorUrl(null); // Don't create blob URL, pass File directly
+      setStatus(`Mirror HDR environment uploaded: ${file.name}`);
+    }
+  };
+
   // Setup scene with uploaded files
   const handleSetup = async () => {
     if (!modelFile) {
@@ -85,13 +117,20 @@ function App() {
     setStatus('Setting up scene...');
 
     try {
+      // Determine which HDR to use based on material type
+      // Pass File object directly - EnvironmentManager will handle it
+      const customHdrPath = materialType === 'MIRROR' 
+        ? (hdrMirrorFile || undefined)
+        : (hdrFile || undefined);
+
       // Pass File object directly for model (ModelManager handles it)
-      // Pass blob URL for textures (TextureLoader handles blob URLs fine)
+      // Pass blob URL for textures and HDR (TextureLoader handles blob URLs fine)
       await viewerRef.current?.setup({
         modelPath: modelFile, // Pass File object directly
         artworkTexture: artworkUrl,
         materialType: materialType,
         frameTexture: frameUrl || undefined,
+        hdriPath: customHdrPath, // Custom HDR path based on material type
         mode: currentMode,
       });
       
@@ -171,6 +210,22 @@ function App() {
     viewerRef.current?.setMaterialType(type);
     setStatus(`Material changed to: ${type}`);
     
+    // Update HDR when material type changes (if custom HDRs are uploaded)
+    if (viewerRef.current) {
+      // Pass File object directly - EnvironmentManager will handle it
+      const customHdrPath = type === 'MIRROR' 
+        ? (hdrMirrorFile || undefined)
+        : (hdrFile || undefined);
+      
+      if (customHdrPath) {
+        // Load the custom HDR for the new material type
+        viewerRef.current.loadHDRI(customHdrPath).catch((error) => {
+          console.error('Failed to load custom HDR:', error);
+          setStatus(`Failed to load HDR: ${error.message}`);
+        });
+      }
+    }
+    
     // Update glass visibility state when switching to/from acrylic
     if (type === 'ACRYLIC' && viewerRef.current) {
       const glassVis = viewerRef.current.getGlassVisibility();
@@ -210,6 +265,7 @@ function App() {
     return () => {
       if (artworkUrl) URL.revokeObjectURL(artworkUrl);
       if (frameUrl) URL.revokeObjectURL(frameUrl);
+      // Note: HDR files are passed as File objects, not blob URLs, so no cleanup needed
     };
   }, [artworkUrl, frameUrl]);
 
@@ -375,6 +431,60 @@ function App() {
             {frameFile && (
               <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
                 ✓ {frameFile.name}
+              </div>
+            )}
+          </div>
+
+          {/* HDR Environment Upload (Optional) */}
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
+              HDR Environment (Optional - for non-mirror materials)
+            </label>
+            <input
+              type="file"
+              accept=".hdr,.exr"
+              onChange={handleHdrUpload}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '11px',
+                backgroundColor: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            />
+            {hdrFile && (
+              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
+                ✓ {hdrFile.name}
+              </div>
+            )}
+          </div>
+
+          {/* Mirror HDR Environment Upload (Optional) */}
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
+              Mirror HDR Environment (Optional - for mirror material)
+            </label>
+            <input
+              type="file"
+              accept=".hdr,.exr"
+              onChange={handleHdrMirrorUpload}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '11px',
+                backgroundColor: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            />
+            {hdrMirrorFile && (
+              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
+                ✓ {hdrMirrorFile.name}
               </div>
             )}
           </div>

@@ -183,33 +183,97 @@ export function useArtworkViewer({
         name === "glass" ||
         name.includes("glass");
 
-      // Artwork: strictly matte, non‑reflective
+      // Artwork: reflective with clearcoat (HDR reflections) but colors stay sharp
       if (isArtwork) {
         mats.forEach((m) => {
           if (!m) return;
-          if ("metalness" in m) m.metalness = 0.0;
-          if ("roughness" in m) m.roughness = 1.0;
-          if ("envMapIntensity" in m) m.envMapIntensity = 0.0;
-          // Ensure no direct envMap on artwork
-          m.envMap = null;
-          if ("clearcoat" in m) m.clearcoat = 0.0;
-          if ("clearcoatRoughness" in m) m.clearcoatRoughness = 1.0;
-          if ("specularIntensity" in m) m.specularIntensity = 0.0;
-          if ("sheen" in m) m.sheen = 0.0;
+          
+          // Ensure it's a PhysicalMaterial for clearcoat reflections
+          if (!m.isMeshPhysicalMaterial && m.isMeshStandardMaterial) {
+            // Upgrade to PhysicalMaterial if needed
+            const upgraded = new THREE.MeshPhysicalMaterial();
+            THREE.MeshStandardMaterial.prototype.copy.call(upgraded, m);
+            Object.assign(m, upgraded);
+            m.isMeshPhysicalMaterial = true;
+          }
+          
+          // Keep base material properties for accurate colors
+          if ("metalness" in m) m.metalness = 0.0; // Non-metallic to preserve colors
+          
+          // Low roughness base for some reflection, but clearcoat does most of the work
+          if ("roughness" in m) m.roughness = 0.3; // Slight base reflection
+          
+          // Use scene.environment for HDR reflections
+          m.envMap = null; // This makes it use scene.environment
+          if ("envMapIntensity" in m) m.envMapIntensity = reflectionIntensity * 0.4; // Moderate intensity
+          
+          // Clearcoat for glossy HDR reflections without affecting base color
+          if (m.isMeshPhysicalMaterial) {
+            m.clearcoat = 1.0; // Maximum clearcoat for glossy reflections
+            m.clearcoatRoughness = 0.0; // Zero for crisp HDR reflections
+            m.transmission = 0.0; // No transmission
+            m.thickness = 0.0;
+            m.ior = 1.0;
+          }
+          
+          // Remove distortion maps
+          m.normalMap = null;
+          m.bumpMap = null;
+          m.displacementMap = null;
+          
+          // Keep texture map and color unchanged - colors stay sharp
+          // m.map and m.color remain as they were
+          
+          // Depth settings
+          m.depthWrite = true;
+          m.depthTest = true;
+          
           m.needsUpdate = true;
         });
       }
 
-      // Glass: glossy + reflective
+      // Glass: visible but transparent, non-reflective, doesn't affect artwork
       if (isGlass) {
         mats.forEach((m) => {
           if (!m) return;
-          if (envMap) m.envMap = envMap;
-          if ("envMapIntensity" in m) m.envMapIntensity = reflectionIntensity;
+          
+          // Very low opacity - just enough to see edges, minimal white overlay
+          m.transparent = true;
+          m.opacity = 0.05; // Very low opacity - visible at edges but minimal white tint
+          
+          // No reflections at all
+          m.envMap = null;
+          if ("envMapIntensity" in m) m.envMapIntensity = 0.0;
+          
+          // No transmission - no blur on artwork
+          if (m.isMeshPhysicalMaterial) {
+            m.transmission = 0.0;
+            m.thickness = 0.0;
+            m.ior = 1.0;
+            m.clearcoat = 0.0;
+            m.clearcoatRoughness = 1.0;
+          }
+          
+          // Matte - no specular highlights
           if ("metalness" in m) m.metalness = 0.0;
-          if ("roughness" in m) m.roughness = 0.05;
-          if ("clearcoat" in m) m.clearcoat = 1.0;
-          if ("clearcoatRoughness" in m) m.clearcoatRoughness = 0.02;
+          if ("roughness" in m) m.roughness = 1.0;
+          
+          // Remove any maps that could affect appearance
+          m.normalMap = null;
+          m.bumpMap = null;
+          m.displacementMap = null;
+          
+          // White color - but with very low opacity it won't tint much
+          m.color.setRGB(1, 1, 1);
+          
+          // Use alphaTest to make it only visible at edges/thicker areas
+          m.alphaTest = 0.01; // Only render where alpha is above threshold
+          
+          // Depth settings
+          m.depthWrite = false;
+          m.depthTest = true;
+          m.side = THREE.DoubleSide; // Visible from both sides
+          
           m.needsUpdate = true;
         });
       }
@@ -251,11 +315,11 @@ export function useArtworkViewer({
         return;
       }
 
-      // Get current acrylicBase brightness value (defaults to 1.5 for more emissive white)
+      // Get current acrylicBase brightness value (defaults to 3.0 for super white and more emissive)
       const baseIntensity =
         (lighting.lighting && typeof lighting.lighting.acrylicBase === "number"
           ? lighting.lighting.acrylicBase
-          : 1.5);
+          : 3.0);
 
       // Check if base layer already exists - update it instead of creating duplicate
       const existingBaseChild = parentMesh.children?.find(
@@ -272,28 +336,34 @@ export function useArtworkViewer({
             ? existingBaseChild.material
             : [existingBaseChild.material];
           mats.forEach((m) => {
-            m.color?.set(0xffffff);
-            m.emissive?.set(0xffffff);
-            m.emissiveIntensity = baseIntensity;
+            // Super white color - brighter than pure white
+            m.color?.setRGB(1.2, 1.2, 1.2); // Brighter than pure white (1.0) for super white
+            m.emissive?.setRGB(1.0, 1.0, 1.0); // Pure white emissive
+            m.emissiveIntensity = baseIntensity; // Higher intensity (3.0) for more emissive
             m.toneMapped = false;  // Critical: prevent ACES from greying it out
             m.envMap = null;
-            m.envMapIntensity = 0.0;
+            m.envMapIntensity = 0.0; // No environment map influence - protects color
+            m.roughness = 1.0; // Matte
+            m.metalness = 0.0; // Non-metallic
             m.polygonOffset = true;
             m.polygonOffsetFactor = 2;  // Increased to push back more
             m.polygonOffsetUnits = 2;   // Increased to push back more
             m.depthWrite = true;  // Ensure depth write is enabled
             m.depthTest = true;
+            m.transparent = false; // Opaque
+            m.opacity = 1.0; // Full opacity
+            m.side = THREE.DoubleSide; // Visible from both sides
             m.needsUpdate = true;
           });
         }
         return;
       }
 
-      // Create new base layer with emissive material (stays white, not tone-mapped)
+      // Create new base layer with emissive material (super white, not tone-mapped)
       const baseMaterial = new THREE.MeshStandardMaterial({
-        color: 0xffffff,  // IMPORTANT: don't keep it black
+        color: new THREE.Color(1.2, 1.2, 1.2),  // Brighter than pure white (1.0) for super white
         emissive: new THREE.Color(0xffffff),  // Pure white emissive
-        emissiveIntensity: baseIntensity,
+        emissiveIntensity: baseIntensity, // Higher intensity for more emissive
         roughness: 1.0,
         metalness: 0.0,
       });
@@ -1424,6 +1494,7 @@ export function useArtworkViewer({
       artworkTexture,
       materialType: newMaterialType,
       frameTexture,
+      hdriPath: customHdriPath, // Custom HDR path (optional)
       mode: initialMode = MODE_TYPES.FULL_BLEED,
     } = options;
 
@@ -1572,9 +1643,46 @@ export function useArtworkViewer({
         if (meshVisibilityManagerRef.current && activeMaterialType === "ACRYLIC") {
           addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
         }
-      } else {
-        // Just wait for any pending operations
-        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      // Load/update HDRI if custom path provided
+      if (customHdriPath && environmentManagerRef.current) {
+        await new Promise((resolve, reject) => {
+          environmentManagerRef.current.loadHDRI(
+            customHdriPath,
+            (newEnvMap) => {
+              const model = modelManagerRef.current?.getModel();
+              if (model && materialType.materialModuleRef.current) {
+                const activeType = materialType.activeMaterialTypeRef.current;
+                const materialModule = materialType.materialModuleRef.current;
+
+                // For acrylics: apply matte to artwork, glossy to glass
+                if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy) {
+                  materialModule.applyArtworkMatteGlassGlossy(
+                    model,
+                    newEnvMap,
+                    lighting.reflectionIntensity
+                  );
+                  enforceAcrylicArtworkMatteGlassGlossy(
+                    model,
+                    newEnvMap,
+                    lighting.reflectionIntensity
+                  );
+                } else if (materialModule.updateMaterials) {
+                  materialModule.updateMaterials(
+                    model,
+                    newEnvMap,
+                    lighting.showReflections,
+                    lighting.reflectionIntensity,
+                    materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+                  );
+                }
+              }
+              resolve();
+            },
+            reject
+          );
+        });
       }
 
       // 3. Apply artwork texture to both fullBleed and shrunk modes

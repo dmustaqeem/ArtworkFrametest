@@ -62,8 +62,8 @@ export const DEFAULT_LIGHTING = {
   fill: 0.25,
   rim: 0.35,
   // Optional acrylic-only control: base brightness for super-white backing
-  // Using 1.5 for more emissive white appearance (emissiveIntensity, range 0.5-3.0)
-  acrylicBase: 1.5,
+  // Using 3.0 for super white and more emissive appearance (emissiveIntensity, range 0.5-5.0)
+  acrylicBase: 3.0,
 };
 
 // =========================

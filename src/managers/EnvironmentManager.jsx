@@ -42,7 +42,7 @@ export class EnvironmentManager {
   }
 
   /**
-   * Load HDRI environment map from path
+   * Load HDRI environment map from path, File object, or blob URL
    */
   loadHDRI(path, onLoad, onError) {
     // Ensure PMREMGenerator is initialized and ready
@@ -65,8 +65,21 @@ export class EnvironmentManager {
     
     const loader = new RGBELoader().setDataType(THREE.HalfFloatType);
     
+    // Handle File objects directly - convert to object URL
+    let objectUrl = null;
+    let finalPath = path;
+    
+    if (path instanceof File) {
+      objectUrl = URL.createObjectURL(path);
+      finalPath = objectUrl;
+    }
+    // Handle blob URLs - use directly
+    else if (typeof path === 'string' && path.startsWith('blob:')) {
+      finalPath = path;
+    }
+    
     loader.load(
-      path,
+      finalPath,
       (hdrTex) => {
         if (!hdrTex || !hdrTex.image) {
           const error = "HDRI file loaded but texture is invalid";
@@ -116,8 +129,17 @@ export class EnvironmentManager {
           // Set new environment map
           this.setEnvironmentMap(newEnvMap);
           
+          // Revoke object URL after loading if we created one
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+          }
+          
           if (onLoad) onLoad(newEnvMap);
         } catch (err) {
+          // Revoke object URL on error
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+          }
           const error = `Failed to process HDRI: ${err.message}`;
           if (onError) onError(error);
           hdrTex.dispose();
@@ -125,7 +147,13 @@ export class EnvironmentManager {
       },
       undefined, // onProgress
       (error) => {
-        const errorMsg = `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`;
+        // Revoke object URL on error
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+        }
+        const errorMsg = path instanceof File 
+          ? `Failed to load HDRI file: ${path.name}`
+          : `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`;
         if (onError) onError(errorMsg);
       }
     );

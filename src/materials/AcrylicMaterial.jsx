@@ -121,7 +121,7 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
   // BaseMaterial will handle downgrading PhysicalMaterial to StandardMaterial for PRINT if needed
   const updatedMat = applyPreset(material, preset, renderer, role, options);
 
-  // For PRINT role (artwork layer), ensure texture is visible
+  // For PRINT role (artwork layer), reflective with clearcoat but colors stay sharp
   if (role === "PRINT") {
     // Enable tone mapping so exposure affects brightness
     // This allows the exposure slider to brighten the artwork
@@ -135,25 +135,36 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     updatedMat.depthWrite = true;    // Write to depth buffer
     updatedMat.depthTest = true;     // Test depth
 
-    // Make artwork strictly matte and non-reflective (only texture/color, no env reflections)
-    if ("metalness" in updatedMat) updatedMat.metalness = 0.0;
-    if ("roughness" in updatedMat) updatedMat.roughness = 1.0; // fully matte
-    if ("envMapIntensity" in updatedMat) updatedMat.envMapIntensity = 0.0;
-    // Remove any clearcoat/specular style highlights
-    if ("clearcoat" in updatedMat) updatedMat.clearcoat = 0.0;
-    if ("clearcoatRoughness" in updatedMat) updatedMat.clearcoatRoughness = 1.0;
-    if ("specularIntensity" in updatedMat) updatedMat.specularIntensity = 0.0;
-    // Ensure no direct envMap is assigned (we rely on scene.environment for glass only)
-    updatedMat.envMap = null;
-
-    // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
+    // Keep base material properties for accurate colors
+    if ("metalness" in updatedMat) updatedMat.metalness = 0.0; // Non-metallic to preserve colors
+    
+    // Low roughness base for some reflection, but clearcoat does most of the work
+    if ("roughness" in updatedMat) updatedMat.roughness = 0.3; // Slight base reflection
+    
+    // Use scene.environment for HDR reflections
+    updatedMat.envMap = null; // This makes it use scene.environment
+    // envMapIntensity will be set by enforceAcrylicArtworkMatteGlassGlossy or can be set here
+    // Default to moderate intensity - can be adjusted
+    if ("envMapIntensity" in updatedMat && updatedMat.envMapIntensity === undefined) {
+      updatedMat.envMapIntensity = 0.4; // Moderate intensity for visible but not overwhelming reflections
+    }
+    
+    // Clearcoat for glossy HDR reflections without affecting base color
     if (updatedMat.isMeshPhysicalMaterial) {
-      updatedMat.transmission = 0;
-      updatedMat.thickness = 0;
+      updatedMat.clearcoat = 1.0; // Maximum clearcoat for glossy reflections
+      updatedMat.clearcoatRoughness = 0.0; // Zero for crisp HDR reflections
+      updatedMat.transmission = 0.0; // No transmission
+      updatedMat.thickness = 0.0;
       updatedMat.ior = 1.0;
     }
+    
+    // Remove any distortion maps that could affect color accuracy
+    updatedMat.normalMap = null;
+    updatedMat.bumpMap = null;
+    updatedMat.displacementMap = null;
 
     // CRITICAL: Ensure texture map is visible and properly configured
+    // Keep texture map unchanged - colors stay sharp
     if (updatedMat.map) {
       updatedMat.map.needsUpdate = true;
       // Ensure map is not null and is properly set
@@ -163,6 +174,7 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     }
 
     // Ensure white base color for artwork (BaseMaterial already does this, but ensure it)
+    // This ensures texture colors are accurate
     if (updatedMat.color) {
       updatedMat.color.set(0xffffff);
     }
@@ -173,14 +185,50 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     applyAcrylicBackSettings(updatedMat);
   }
 
-  // For GLASS and ACRYLIC roles, ensure proper glass-like properties
-  if ((role === "GLASS" || role === "ACRYLIC") && updatedMat.isMeshPhysicalMaterial) {
+  // For GLASS role: visible but transparent, non-reflective, doesn't affect artwork
+  if (role === "GLASS" && updatedMat.isMeshPhysicalMaterial) {
+    // Very low opacity - just enough to see edges, minimal white overlay
+    updatedMat.transparent = true;
+    updatedMat.opacity = 0.05; // Very low opacity - visible at edges but minimal white tint
+
+    // No transmission - no blur on artwork
+    updatedMat.transmission = 0.0;
+    updatedMat.thickness = 0.0;
+    updatedMat.ior = 1.0;
+    
+    // No reflections at all
+    updatedMat.envMap = null;
+    updatedMat.envMapIntensity = 0.0;
+    updatedMat.clearcoat = 0.0;
+    updatedMat.clearcoatRoughness = 1.0;
+
+    // Use a neutral, pure white base - but with very low opacity it won't tint much
+    updatedMat.color.setRGB(1.0, 1.0, 1.0);
+
+    // Matte - no specular highlights
+    updatedMat.roughness = 1.0;
+    updatedMat.metalness = 0.0;
+    
+    // Use alphaTest to make it only visible at edges/thicker areas
+    updatedMat.alphaTest = 0.01; // Only render where alpha is above threshold
+    
+    // CRITICAL: Remove any normal/bump/displacement maps that could affect appearance
+    updatedMat.normalMap = null;
+    updatedMat.bumpMap = null;
+    updatedMat.displacementMap = null;
+
+    // Depth settings for proper rendering
+    updatedMat.depthWrite = false; // Important for transparent materials
+    updatedMat.depthTest = true;
+    updatedMat.side = THREE.DoubleSide; // Visible from both sides
+  }
+  // For ACRYLIC role: keep true glass but with minimal distortion
+  else if (role === "ACRYLIC" && updatedMat.isMeshPhysicalMaterial) {
     // Ensure transparency is enabled for transmission
     updatedMat.transparent = true;
     updatedMat.opacity = 1.0; // Full opacity, transparency comes from transmission
 
     // Use a neutral, pure white base for glass so it doesn't tint the artwork
-    // This keeps reflections but avoids adding any grey cast to whites behind the acrylic
     updatedMat.color.setRGB(1.0, 1.0, 1.0);
 
     // CRITICAL: Ensure zero roughness for optical clarity (no transmission blur)
