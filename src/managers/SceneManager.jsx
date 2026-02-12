@@ -49,12 +49,18 @@ export class SceneManager {
     );
     this.camera.position.copy(this.options.initialCameraPosition);
 
-    // Renderer
+    // Renderer - optimized for quality
     this.renderer = new THREE.WebGLRenderer({ 
       antialias: true, 
-      alpha: true 
+      alpha: true,
+      powerPreference: "high-performance", // Use dedicated GPU if available
+      precision: "highp", // High precision for better quality
+      stencil: false, // Disable if not needed for performance
+      depth: true, // Enable depth buffer
+      logarithmicDepthBuffer: false, // Disable for performance (enable if needed for large scenes)
     });
     this.renderer.setSize(initialWidth, initialHeight);
+    // Use device pixel ratio (capped at 2 for performance) for crisp rendering
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = this.options.outputColorSpace;
     this.renderer.toneMapping = this.options.toneMapping;

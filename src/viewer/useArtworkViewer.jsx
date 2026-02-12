@@ -272,7 +272,9 @@ export function useArtworkViewer({
 
       if (existingBaseChild) {
         // Update existing base layer material to ensure it stays white
-        existingBaseChild.visible = true;  // Ensure it's visible
+        // CRITICAL: Base layer visibility must follow parent visibility
+        // If parent is hidden (e.g., Artwork_Shrunk when in fullBleed mode), base should be hidden too
+        existingBaseChild.visible = parentMesh.visible;
         if (existingBaseChild.material) {
           const mats = Array.isArray(existingBaseChild.material)
             ? existingBaseChild.material
@@ -331,7 +333,9 @@ export function useArtworkViewer({
       baseMesh.name = `AcrylicBase_${parentMesh.name || ""}`;
       // Lower renderOrder ensures it renders before the artwork (in opaque pass)
       baseMesh.renderOrder = (parentMesh.renderOrder || 0) - 1;
-      baseMesh.visible = true;  // Explicitly ensure it's visible
+      // CRITICAL: Base layer visibility must follow parent visibility
+      // If parent is hidden (e.g., Artwork_Shrunk when in fullBleed mode), base should be hidden too
+      baseMesh.visible = parentMesh.visible;
       baseMesh.userData = {
         ...(baseMesh.userData || {}),
         isAcrylicEmissiveBase: true,
@@ -347,11 +351,12 @@ export function useArtworkViewer({
       // and it never extends to the physical back meshes.
       parentMesh.add(baseMesh);
 
-      // Ensure parent is visible so base layer is visible too
+      // Log visibility status for debugging
       if (!parentMesh.visible) {
-        console.warn('[AcrylicBase] Parent mesh is not visible:', parentMesh.name);
+        console.log('[AcrylicBase] Created base layer for hidden parent:', parentMesh.name, 'baseMesh visible:', baseMesh.visible);
+      } else {
+        console.log('[AcrylicBase] Created base layer for:', parentMesh.name, 'baseMesh name:', baseMesh.name, 'visible:', baseMesh.visible);
       }
-      console.log('[AcrylicBase] Created base layer for:', parentMesh.name, 'baseMesh name:', baseMesh.name);
     });
 
     const createdCount = meshes.filter((info) => {

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import * as THREE from "three";
-import { MATERIAL_CONFIG, MODEL_PATHS } from "../config/appConfig.jsx";
+import { MATERIAL_CONFIG, MODEL_PATHS, TEXTURE_CONFIG } from "../config/appConfig.jsx";
+import { TextureManager } from "../managers/TextureManager.jsx";
 
 /**
  * TextureLayerManager Component
@@ -473,24 +474,75 @@ export default function TextureLayerManager({
     if (isAcrylic && (isFullBleed || isShrunk)) {
       // Create a composite texture with white base and artwork on top
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
       
-      // Get image dimensions
+      // Get exact image dimensions to avoid any scaling
       const img = sourceImage;
-      const width = img.width || img.naturalWidth || (img instanceof HTMLCanvasElement ? img.width : 2048);
-      const height = img.height || img.naturalHeight || (img instanceof HTMLCanvasElement ? img.height : 2048);
+      let width, height;
       
-      canvas.width = width;
-      canvas.height = height;
+      if (img instanceof HTMLImageElement) {
+        // For images, use naturalWidth/naturalHeight for actual pixel dimensions
+        // CRITICAL: Wait for image to be fully loaded to get accurate dimensions
+        if (!img.complete || img.naturalWidth === 0) {
+          console.warn('Image not fully loaded, using source image directly');
+          processedImage = sourceImage;
+        } else {
+          width = img.naturalWidth;
+          height = img.naturalHeight;
+        }
+      } else if (img instanceof HTMLCanvasElement) {
+        // For canvas, use exact dimensions
+        width = img.width;
+        height = img.height;
+      } else {
+        // Fallback (shouldn't happen, but handle gracefully)
+        width = img.width || 2048;
+        height = img.height || 2048;
+      }
       
-      // Draw white background first
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, width, height);
-      
-      // Draw artwork texture on top (preserving alpha)
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      processedImage = canvas;
+      // Ensure we have valid dimensions
+      if (!width || !height || width <= 0 || height <= 0) {
+        console.warn('Invalid image dimensions for acrylic composite, using source image directly');
+        processedImage = sourceImage;
+      } else {
+        // Set canvas to exact image dimensions (no scaling)
+        // CRITICAL: Set dimensions before getting context to avoid scaling issues
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Log composite size for debugging (helps identify NPOT issues)
+        const isPOT = TextureManager.isPowerOfTwo(width) && TextureManager.isPowerOfTwo(height);
+        console.log(`[AcrylicComposite] Canvas size: ${width}x${height}, POT: ${isPOT}`);
+        
+        // CRITICAL: Disable image smoothing for crisp, pixel-perfect rendering
+        ctx.imageSmoothingEnabled = false;
+        // Also disable for image pattern operations
+        if (ctx.imageSmoothingQuality !== undefined) {
+          ctx.imageSmoothingQuality = 'high';
+        }
+        // Ensure canvas uses optimal rendering settings
+        ctx.textBaseline = 'top';
+        ctx.textAlign = 'left';
+        
+        // CRITICAL: Clear canvas first to ensure clean starting state
+        ctx.clearRect(0, 0, width, height);
+        
+        // Draw white background first
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
+        
+        // CRITICAL: Draw artwork without explicit dimensions to avoid any scaling
+        // If dimensions match exactly, drawImage without width/height preserves pixels perfectly
+        if (img instanceof HTMLImageElement && img.naturalWidth === width && img.naturalHeight === height) {
+          // Draw without dimensions - preserves pixel-perfect rendering
+          ctx.drawImage(img, 0, 0);
+        } else {
+          // For canvas or mismatched dimensions, use explicit dimensions
+          ctx.drawImage(img, 0, 0, width, height);
+        }
+        
+        processedImage = canvas;
+      }
     }
 
     // For acrylic artwork layers, build an emissive mask that only boosts
@@ -521,10 +573,13 @@ export default function TextureLayerManager({
           if (emissiveTex) {
             finalMat.emissive = new THREE.Color(0xffffff);
             finalMat.emissiveMap = emissiveTex;
-            // Stronger boost for “super-white” paper look (tweak as needed)
-            finalMat.emissiveIntensity = 20;
+            // Lower intensity for more natural look (prevents flattening and glass glow)
+            // Range 1-5 is more physically safe than 20
+            finalMat.emissiveIntensity = 3.0;
             // Keep tone mapping so global exposure still behaves correctly
             finalMat.toneMapped = true;
+            // Ensure emissive map uses SRGB color space
+            emissiveTex.colorSpace = THREE.SRGBColorSpace;
           }
         } catch (e) {
           // If emissive mask creation fails, fall back gracefully with no emissive boost
@@ -573,22 +628,57 @@ export default function TextureLayerManager({
       }
     }
     
-    // Create new texture from image (no processing)
+    // Create new texture from image
+    // For acrylic artwork layers, ALWAYS use crisp settings for sharp textures
+    const isAcrylicArtwork = isAcrylic && (isFullBleed || isShrunk);
+    const useCrisp = isAcrylicArtwork; // Force crisp for acrylic artwork (ignore TEXTURE_CONFIG)
+    
     let clonedTex;
     try {
       // Use TextureManager to create texture if available
-      if (textureManager && textureManager.createTextureFromImage) {
+          if (textureManager && textureManager.createTextureFromImage) {
         clonedTex = textureManager.createTextureFromImage(processedImage, {
-          flipY: false
+          flipY: false,
+          crisp: useCrisp,
+          maxAnisotropy: TEXTURE_CONFIG.MAX_ANISOTROPY,
+          useRepeatWrapping: true, // Use RepeatWrapping since we use offset/repeat UI
+          premultiplyAlpha: true, // Prevent edge halos when compositing over white
         });
       } else {
-        // Fallback: create texture directly (matching working test app settings)
+        // Fallback: create texture directly
         clonedTex = new THREE.Texture(processedImage);
-        clonedTex.wrapS = THREE.ClampToEdgeWrapping;    // No horizontal tiling
-        clonedTex.wrapT = THREE.ClampToEdgeWrapping;    // No vertical tiling
-        clonedTex.generateMipmaps = false;               // No mipmap generation (avoids alpha artifacts)
-        clonedTex.minFilter = THREE.LinearFilter;       // Linear filtering
-        clonedTex.magFilter = THREE.LinearFilter;       // Linear filtering
+        clonedTex.wrapS = THREE.ClampToEdgeWrapping;
+        clonedTex.wrapT = THREE.ClampToEdgeWrapping;
+        
+        // Check if texture is power-of-two for mipmap decision
+        const texWidth = processedImage?.naturalWidth || processedImage?.width || 0;
+        const texHeight = processedImage?.naturalHeight || processedImage?.height || 0;
+        const isPOT = texWidth > 0 && texHeight > 0 && 
+                     TextureManager.isPowerOfTwo(texWidth) && 
+                     TextureManager.isPowerOfTwo(texHeight);
+        
+        if (useCrisp) {
+          // Crisp settings: only use mipmaps for power-of-two textures
+          // NPOT textures with mipmaps can cause resampling/blur issues
+          clonedTex.generateMipmaps = isPOT;
+          clonedTex.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+          clonedTex.magFilter = THREE.LinearFilter;
+          // Use RepeatWrapping since we use offset/repeat UI
+          clonedTex.wrapS = THREE.RepeatWrapping;
+          clonedTex.wrapT = THREE.RepeatWrapping;
+          // Premultiply alpha to prevent edge halos when compositing over white
+          clonedTex.premultiplyAlpha = true;
+          // Note: anisotropy requires renderer, so we'll set it later if possible
+        } else {
+          // Fast settings (backward compatible)
+          clonedTex.generateMipmaps = false;
+          clonedTex.minFilter = THREE.LinearFilter;
+          clonedTex.magFilter = THREE.LinearFilter;
+          clonedTex.wrapS = THREE.ClampToEdgeWrapping;
+          clonedTex.wrapT = THREE.ClampToEdgeWrapping;
+          clonedTex.premultiplyAlpha = false;
+        }
+        
         clonedTex.colorSpace = THREE.SRGBColorSpace;
         clonedTex.flipY = false;
         clonedTex.needsUpdate = true;
@@ -605,6 +695,40 @@ export default function TextureLayerManager({
     // Apply ONLY to map (color/diffuse texture)
     // finalMat is already the fresh material reference from above
     finalMat.map = clonedTex;
+    
+    // For acrylic artwork layers, ensure crisp texture settings are applied
+    if (isAcrylicArtwork && finalMat.map) {
+      // Always apply crisp settings for acrylic artwork (force crisp)
+      // CRITICAL: Only enable mipmaps for power-of-two textures
+      // NPOT textures with mipmaps can cause resampling/blur issues in WebGL
+      const texWidth = finalMat.map.image?.naturalWidth || finalMat.map.image?.width || 0;
+      const texHeight = finalMat.map.image?.naturalHeight || finalMat.map.image?.height || 0;
+      const isPOT = texWidth > 0 && texHeight > 0 && 
+                   TextureManager.isPowerOfTwo(texWidth) && 
+                   TextureManager.isPowerOfTwo(texHeight);
+      
+      finalMat.map.generateMipmaps = isPOT;
+      finalMat.map.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      finalMat.map.magFilter = THREE.LinearFilter;
+      // Use RepeatWrapping since we use offset/repeat UI
+      finalMat.map.wrapS = THREE.RepeatWrapping;
+      finalMat.map.wrapT = THREE.RepeatWrapping;
+      // Premultiply alpha to prevent edge halos when compositing over white
+      finalMat.map.premultiplyAlpha = true;
+      // Set anisotropy if renderer is available
+      if (renderer?.capabilities) {
+        finalMat.map.anisotropy = Math.min(
+          TEXTURE_CONFIG.MAX_ANISOTROPY,
+          renderer.capabilities.getMaxAnisotropy()
+        );
+      }
+      // Don't force format/type - let Three.js decide based on source
+      // This prevents unintended conversions and gamma issues
+      finalMat.map.needsUpdate = true;
+    }
+    
+    // Mark material for update
+    finalMat.needsUpdate = true;
     
     // For metals: Copy brushed metal finish from corresponding metal background mesh
     if (isMetal && (isFullBleed || isShrunk)) {

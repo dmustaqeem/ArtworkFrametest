@@ -14,15 +14,15 @@ export const ACRYLIC_PRESET = {
     renderOrder: 1, // Render below glass (glass renders on top)
   },
   GLASS: {
-    // Premium 5mm acrylic glass - glossy and reflective like glass
+    // Premium 5mm acrylic glass - optically clear, zero blur
     requiresPhysical: true, // Need MeshPhysicalMaterial for transmission
     transmission: 1.0, // Maximum transmission for pure glass transparency
-    roughness: 0.02, // Very smooth, glossy surface (even smoother)
+    roughness: 0.0, // CRITICAL: Zero roughness for optical clarity (no transmission blur)
     metalness: 0.0,
     clearcoat: 1.0, // Maximum clearcoat for glossy finish
-    clearcoatRoughness: 0.02, // Very smooth clearcoat
+    clearcoatRoughness: 0.0, // CRITICAL: Zero for crisp highlights without blur
     ior: 1.49, // Index of refraction for acrylic (close to glass)
-    thickness: 0.005, // 5mm thickness in meters
+    thickness: 0.002, // Reduced thickness for less refractive distortion (2mm)
     envBase: 1.6, // Increased reflection intensity for brighter appearance
     renderOrder: 2, // Render on top of artwork (PRINT layer)
   },
@@ -30,14 +30,24 @@ export const ACRYLIC_PRESET = {
     // Acrylic material - similar to glass but slightly less transparent
     requiresPhysical: true,
     transmission: 0.98, // Very high transmission, almost pure glass
-    roughness: 0.02, // Very smooth, glossy surface
+    roughness: 0.0, // CRITICAL: Zero roughness for optical clarity (no transmission blur)
     metalness: 0.0,
     clearcoat: 1.0, // Maximum clearcoat for glossy finish
-    clearcoatRoughness: 0.02, // Very smooth clearcoat
+    clearcoatRoughness: 0.0, // CRITICAL: Zero for crisp highlights without blur
     ior: 1.49, // Index of refraction for acrylic
-    thickness: 0.005, // 5mm thickness
+    thickness: 0.002, // Reduced thickness for less refractive distortion (2mm)
     envBase: 1.6, // Increased reflection intensity for brighter appearance
     renderOrder: 2, // Render on top of artwork (PRINT layer)
+  },
+  BACK: {
+    // Acrylic_Back layer - matte, non-reflective, bright (like Mirror_Back)
+    requiresPhysical: false,
+    metalness: 0.0,
+    roughness: 0.8, // Mostly matte (like mirror back, not chalk-flat)
+    envBase: 0.0, // No environment reflections
+    clearcoat: 0.0,
+    clearcoatRoughness: 1.0,
+    specularIntensity: 0.0,
   },
   DEFAULT: {
     // Default acrylic-like properties
@@ -71,9 +81,9 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
   }
 
   // ✅ ADD THIS HERE (before GLASS detection)
-  // Acrylic back should never be GLASS
+  // Acrylic back should be classified as BACK role (not DEFAULT or GLASS)
   if (meshNameLower.includes("acrylic") && meshNameLower.includes("back")) {
-    return "DEFAULT"; // keeps it matte/non-glass
+    return "BACK"; // Classify as BACK role for proper matte/bright settings
   }
 
   // GLASS: Check for glass/cover/plexi indicators OR transmission > 0
@@ -158,6 +168,11 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     }
   }
 
+  // For BACK role (Acrylic_Back), apply matte and bright settings
+  if (role === "BACK") {
+    applyAcrylicBackSettings(updatedMat);
+  }
+
   // For GLASS and ACRYLIC roles, ensure proper glass-like properties
   if ((role === "GLASS" || role === "ACRYLIC") && updatedMat.isMeshPhysicalMaterial) {
     // Ensure transparency is enabled for transmission
@@ -168,9 +183,21 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     // This keeps reflections but avoids adding any grey cast to whites behind the acrylic
     updatedMat.color.setRGB(1.0, 1.0, 1.0);
 
+    // CRITICAL: Ensure zero roughness for optical clarity (no transmission blur)
+    updatedMat.roughness = 0.0;
+    updatedMat.clearcoatRoughness = 0.0;
+    
+    // CRITICAL: Remove any normal/bump/displacement maps that could distort/blur transmission
+    updatedMat.normalMap = null;
+    updatedMat.bumpMap = null;
+    updatedMat.displacementMap = null;
+
     // Set attenuation for realistic light transmission (neutral white)
     updatedMat.attenuationColor = new THREE.Color(0xffffff);
     updatedMat.attenuationDistance = 1.0;
+    
+    // Reduce thickness for less refractive distortion
+    updatedMat.thickness = 0.002;
 
     // Depth settings for proper rendering
     updatedMat.depthWrite = false; // Important for transparent materials
@@ -264,18 +291,23 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
         if (envMap) pm.envMap = envMap;
         pm.envMapIntensity = reflectionIntensity;
 
-        // glossy
-        pm.roughness = 0.03;        // 0..0.08 nice
+        // CRITICAL: Zero roughness for optical clarity (no transmission blur)
+        pm.roughness = 0.0;
         pm.metalness = 0;
 
-        // glass look
+        // glass look - optically clear
         pm.transmission = 1.0;      // real glass
-        pm.thickness = 0.02;        // adjust for your scale (0.005..0.05)
+        pm.thickness = 0.002;       // Reduced thickness for less refractive distortion
         pm.ior = 1.49;
 
-        // crisp highlights
+        // crisp highlights (zero roughness for no blur)
         pm.clearcoat = 1.0;
-        pm.clearcoatRoughness = 0.02;
+        pm.clearcoatRoughness = 0.0;
+        
+        // CRITICAL: Remove any normal/bump/displacement maps that could distort/blur transmission
+        pm.normalMap = null;
+        pm.bumpMap = null;
+        pm.displacementMap = null;
 
         pm.needsUpdate = true;
       });
@@ -303,8 +335,9 @@ const applyAcrylicBackSettings = (mat) => {
 
   // Bright RGB like mirror back (but keep tone mapping enabled to prevent blowout)
   // This creates the bright white appearance without the "white layer" effect of emissive
+  // Match Mirror_Back brightness (3.0, 3.0, 3.0) for consistency
   if (mat.color) {
-    mat.color.setRGB(1.5, 1.5, 1.5); // Bright like mirror back
+    mat.color.setRGB(3.0, 3.0, 3.0); // Bright like mirror back (was 1.5, now matches Mirror_Back)
   }
 
   // CRITICAL: Keep tone mapping enabled (unlike old approach) - prevents blowout

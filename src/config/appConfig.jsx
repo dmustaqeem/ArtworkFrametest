@@ -214,6 +214,18 @@ export const ENV_ROTATION_CONFIG = {
 };
 
 // =========================
+// TEXTURE QUALITY CONFIG
+// =========================
+export const TEXTURE_CONFIG = {
+  // Texture quality settings for artwork layers
+  // CRISP: Uses mipmaps and anisotropy for sharp textures (recommended for artwork)
+  // FAST: No mipmaps, linear filtering (may appear blurry but faster)
+  QUALITY: "CRISP", // Options: "CRISP" | "FAST"
+  // Maximum anisotropy level (higher = sharper at oblique angles, max typically 16)
+  MAX_ANISOTROPY: 16,
+};
+
+// =========================
 // USDZ EXPORT CONFIG
 // =========================
 export const USDZ_CONFIG = {
