@@ -220,7 +220,6 @@ export function useArtworkViewer({
   // under the Artwork_FullBleed and Artwork_Shrunk meshes (or Acrylic_FullBleed/Acrylic_Shrunk if they exist).
   const addAcrylicEmissiveBaseLayers = (meshVisibilityManager, activeMaterialType) => {
     if (!meshVisibilityManager || activeMaterialType !== "ACRYLIC") {
-      console.log('[AcrylicBase] Skipping - meshVisibilityManager:', !!meshVisibilityManager, 'activeMaterialType:', activeMaterialType);
       return;
     }
 
@@ -229,12 +228,8 @@ export function useArtworkViewer({
       : meshVisibilityManager.meshes || [];
 
     if (!Array.isArray(meshes) || meshes.length === 0) {
-      console.log('[AcrylicBase] No meshes found');
       return;
     }
-
-    console.log('[AcrylicBase] Checking meshes for acrylic base layers. Total meshes:', meshes.length);
-    console.log('[AcrylicBase] All meshes:', meshes.map(m => ({ name: m.name, meshType: m.meshType })));
 
     meshes.forEach((info) => {
       const meshType = info.meshType;
@@ -244,7 +239,6 @@ export function useArtworkViewer({
       // These are the meshes where textures are applied, so we need the base layer behind them
       // Also support acrylic substrate meshes if they exist (Acrylic_FullBleed/Acrylic_Shrunk)
       if (!parentMesh || !parentMesh.geometry) {
-        console.log('[AcrylicBase] Skipping - no parentMesh or geometry:', info.name, 'meshType:', meshType);
         return;
       }
 
@@ -256,8 +250,6 @@ export function useArtworkViewer({
       if (!isArtworkMesh && !isAcrylicSubstrateMesh) {
         return;
       }
-
-      console.log('[AcrylicBase] Found target mesh:', parentMesh.name, 'meshType:', meshType, 'isArtwork:', isArtworkMesh, 'isAcrylicSubstrate:', isAcrylicSubstrateMesh);
 
       // Get current acrylicBase brightness value (defaults to 1.5 for more emissive white)
       const baseIntensity =
@@ -294,7 +286,6 @@ export function useArtworkViewer({
             m.needsUpdate = true;
           });
         }
-        console.log('[AcrylicBase] Updated existing base layer for:', parentMesh.name, 'visible:', existingBaseChild.visible, 'parent visible:', parentMesh.visible);
         return;
       }
 
@@ -350,24 +341,7 @@ export function useArtworkViewer({
       // Attach as a child so visibility follows the artwork mesh
       // and it never extends to the physical back meshes.
       parentMesh.add(baseMesh);
-
-      // Log visibility status for debugging
-      if (!parentMesh.visible) {
-        console.log('[AcrylicBase] Created base layer for hidden parent:', parentMesh.name, 'baseMesh visible:', baseMesh.visible);
-      } else {
-        console.log('[AcrylicBase] Created base layer for:', parentMesh.name, 'baseMesh name:', baseMesh.name, 'visible:', baseMesh.visible);
-      }
     });
-
-    const createdCount = meshes.filter((info) => {
-      const meshType = info.meshType;
-      const isArtworkMesh = meshType === "fullBleed" || meshType === "shrunk";
-      const isAcrylicSubstrateMesh = meshType === "acrylicFullBleed" || meshType === "acrylicShrunk";
-      return (isArtworkMesh || isAcrylicSubstrateMesh) && info.mesh && info.mesh.children &&
-        info.mesh.children.some(child => child.userData && child.userData.isAcrylicEmissiveBase);
-    }).length;
-
-    console.log('[AcrylicBase] Completed. Created base layers for', createdCount, 'meshes');
   };
 
   // Set material type from prop
@@ -754,24 +728,11 @@ export function useArtworkViewer({
     const targetMode = mode || currentMode;
     const allLayers = textureLayersHook.allTextureLayersRef.current || [];
 
-    console.log('updateArtwork called:', {
-      targetMode,
-      totalLayers: allLayers.length,
-      availableMeshTypes: allLayers.map(l => ({ name: l.meshName, type: l.meshType }))
-    });
-
     const layer = findArtworkTextureLayer(allLayers, targetMode);
 
     if (!layer) {
-      console.warn(`No artwork layer found for mode: ${targetMode}. Available layers:`, allLayers.map(l => ({ name: l.meshName, type: l.meshType })));
       return false;
     }
-
-    console.log('Found layer for texture application:', {
-      meshName: layer.meshName,
-      meshType: layer.meshType,
-      layerId: layer.id
-    });
 
     // Load texture
     return new Promise((resolve, reject) => {
@@ -818,13 +779,8 @@ export function useArtworkViewer({
 
           if (isMetal) {
             // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
-            if (isFrame) {
-              console.log('Applying texture to frame mesh:', layer.meshName);
-            } else if (isFullBleed || isShrunk) {
-              console.log('Applying texture to artwork mesh (metal):', layer.meshName, 'Mesh type:', layer.meshType);
-            } else {
+            if (!isFrame && !isFullBleed && !isShrunk) {
               // Skip other mesh types for metals
-              console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for metals. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
               resolve(false);
               return;
             }
@@ -882,8 +838,6 @@ export function useArtworkViewer({
               const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (activeType === "METAL" || meshNameLower.includes("silver")));
               const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (activeType === "METAL_BOX" || meshNameLower.includes("white")));
 
-              console.log(`[Metal PBR] MaterialType: ${activeType}, DetectedMetalType: ${detectedMetalType}, isSilver: ${isSilver}, isWhite: ${isWhite}, meshName: ${layer.meshName}`);
-
               if (scene) {
                 scene.traverse((obj) => {
                   if (obj.isMesh && obj.material) {
@@ -908,7 +862,6 @@ export function useArtworkViewer({
                         mats.forEach((m) => {
                           if (m.metalness !== undefined && m.metalness > 0.4) {
                             metalMatForColor = m;
-                            console.log(`[Metal PBR] Found FullBleed material for color: ${obj.name}, metalness: ${m.metalness}`);
                           }
                         });
                       }
@@ -942,12 +895,10 @@ export function useArtworkViewer({
                       }
 
                       if (shouldMatch) {
-                        console.log(`[Metal PBR] Found matching mesh: ${obj.name}`);
                         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
                         mats.forEach((m) => {
                           if (m.metalness !== undefined && m.metalness > 0.4) {
                             metalMatForMaps = m;
-                            console.log(`[Metal PBR] Selected material for PBR maps: ${obj.name}, metalness: ${m.metalness}`);
                           }
                         });
                       }
@@ -1019,13 +970,8 @@ export function useArtworkViewer({
             mat.needsUpdate = true;
           } else if (isMirror) {
             // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
-            if (isFrame) {
-              console.log('Applying texture to frame mesh:', layer.meshName);
-            } else if (isFullBleed || isShrunk) {
-              console.log('Applying texture to artwork mesh (mirror):', layer.meshName, 'Mesh type:', layer.meshType);
-            } else {
+            if (!isFrame && !isFullBleed && !isShrunk) {
               // Skip other mesh types for mirrors
-              console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for mirrors. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
               resolve(false);
               return;
             }
@@ -1085,8 +1031,6 @@ export function useArtworkViewer({
 
               // Keep useful maps if they exist (AO, emissive, etc.)
               // But remove reflection-related ones
-
-              console.log(`Set matte properties for mirror artwork layer: "${layer.meshName}" (roughness: ${mat.roughness}, envMapIntensity: ${mat.envMapIntensity})`);
             }
 
             // Enable transparency for PNG textures (alpha channel support)
@@ -1323,10 +1267,7 @@ export function useArtworkViewer({
     const isShrunk = layer.meshType === "shrunk";
 
     if (isMirror && (isFullBleed || isShrunk)) {
-      const restored = textureLayersHook.restoreOriginalMaterialProperties(layer.id, mat);
-      if (restored) {
-        console.log(`Restored original material properties for mirror artwork layer: "${layer.meshName}"`);
-      }
+      textureLayersHook.restoreOriginalMaterialProperties(layer.id, mat);
     }
 
     mat.needsUpdate = true;
@@ -1946,6 +1887,120 @@ export function useArtworkViewer({
     getMeshVisibility: (meshId) => {
       const mesh = meshVisibilityManagerRef.current?.getMeshById(meshId);
       return mesh ? mesh.visible : null;
+    },
+    // ============================================
+    // GLASS VISIBILITY CONTROL (for acrylics)
+    // ============================================
+    setGlassVisibility: (visible) => {
+      const activeType = materialType.activeMaterialTypeRef.current;
+      if (activeType !== "ACRYLIC") {
+        console.warn("setGlassVisibility is only available for ACRYLIC material type");
+        return false;
+      }
+      
+      const model = modelManagerRef.current?.getModel();
+      if (!model) return false;
+      
+      let found = false;
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.name) return;
+        const name = obj.name.toLowerCase();
+        const isGlass = name === "glass" || name.includes("glass");
+        
+        if (isGlass) {
+          obj.visible = visible;
+          found = true;
+        }
+      });
+      
+      // Also update in meshVisibilityManager if glass meshes are tracked
+      if (meshVisibilityManagerRef.current) {
+        const meshes = meshVisibilityManagerRef.current.getMeshes();
+        meshes.forEach(m => {
+          if (m.meshType === "glass" && m.mesh) {
+            m.mesh.visible = visible;
+            m.visible = visible;
+          }
+        });
+      }
+      
+      if (found) {
+        forceRender();
+        return true;
+      }
+      return false;
+    },
+    getGlassVisibility: () => {
+      const activeType = materialType.activeMaterialTypeRef.current;
+      if (activeType !== "ACRYLIC") {
+        return null;
+      }
+      
+      const model = modelManagerRef.current?.getModel();
+      if (!model) return null;
+      
+      let glassMesh = null;
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.name) return;
+        const name = obj.name.toLowerCase();
+        const isGlass = name === "glass" || name.includes("glass");
+        
+        if (isGlass && !glassMesh) {
+          glassMesh = obj;
+        }
+      });
+      
+      return glassMesh ? glassMesh.visible : null;
+    },
+    toggleGlassVisibility: () => {
+      const activeType = materialType.activeMaterialTypeRef.current;
+      if (activeType !== "ACRYLIC") {
+        console.warn("toggleGlassVisibility is only available for ACRYLIC material type");
+        return false;
+      }
+      
+      const model = modelManagerRef.current?.getModel();
+      if (!model) return false;
+      
+      let glassMesh = null;
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.name) return;
+        const name = obj.name.toLowerCase();
+        const isGlass = name === "glass" || name.includes("glass");
+        
+        if (isGlass && !glassMesh) {
+          glassMesh = obj;
+        }
+      });
+      
+      if (!glassMesh) return false;
+      
+      const newVisibility = !glassMesh.visible;
+      
+      // Update all glass meshes
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.name) return;
+        const name = obj.name.toLowerCase();
+        const isGlass = name === "glass" || name.includes("glass");
+        
+        if (isGlass) {
+          obj.visible = newVisibility;
+        }
+      });
+      
+      // Also update in meshVisibilityManager
+      if (meshVisibilityManagerRef.current) {
+        const meshes = meshVisibilityManagerRef.current.getMeshes();
+        meshes.forEach(m => {
+          if (m.meshType === "glass" && m.mesh) {
+            m.mesh.visible = newVisibility;
+            m.visible = newVisibility;
+          }
+        });
+      }
+      
+      forceRender();
+      return true;
     },
     setMeshVisibilityBatch: (updates) => {
       if (!meshVisibilityManagerRef.current) return;

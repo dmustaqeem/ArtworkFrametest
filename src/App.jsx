@@ -21,6 +21,7 @@ function App() {
   const [currentMode, setCurrentMode] = useState('fullBleed');
   const [materialType, setMaterialType] = useState('ACRYLIC');
   const [reflectionIntensity, setReflectionIntensity] = useState(0.2);
+  const [glassVisible, setGlassVisible] = useState(true);
   
   // File state - store File objects directly
   const [modelFile, setModelFile] = useState(null);
@@ -93,6 +94,18 @@ function App() {
         frameTexture: frameUrl || undefined,
         mode: currentMode,
       });
+      
+      // Sync glass visibility after setup (if acrylic)
+      if (materialType === 'ACRYLIC' && viewerRef.current) {
+        const glassVis = viewerRef.current.getGlassVisibility();
+        if (glassVis !== null) {
+          setGlassVisible(glassVis);
+        } else {
+          // Set initial visibility
+          viewerRef.current.setGlassVisibility(glassVisible);
+        }
+      }
+      
       setStatus('Scene ready!');
     } catch (error) {
       console.error('Setup error:', error);
@@ -157,6 +170,14 @@ function App() {
     setMaterialType(type);
     viewerRef.current?.setMaterialType(type);
     setStatus(`Material changed to: ${type}`);
+    
+    // Update glass visibility state when switching to/from acrylic
+    if (type === 'ACRYLIC' && viewerRef.current) {
+      const glassVis = viewerRef.current.getGlassVisibility();
+      if (glassVis !== null) {
+        setGlassVisible(glassVis);
+      }
+    }
   };
 
   // Handle reflection intensity change
@@ -164,6 +185,24 @@ function App() {
     setReflectionIntensity(value);
     viewerRef.current?.setReflectionIntensity(value);
     setStatus(`Reflection intensity: ${value.toFixed(2)}`);
+  };
+
+  // Handle glass visibility toggle (acrylic only)
+  const handleToggleGlassVisibility = () => {
+    if (materialType !== 'ACRYLIC') {
+      setStatus('Glass visibility control is only available for ACRYLIC material type');
+      return;
+    }
+    
+    const newVisibility = !glassVisible;
+    const success = viewerRef.current?.setGlassVisibility(newVisibility);
+    
+    if (success) {
+      setGlassVisible(newVisibility);
+      setStatus(`Glass ${newVisibility ? 'enabled' : 'disabled'}`);
+    } else {
+      setStatus('Failed to toggle glass visibility - make sure model is loaded');
+    }
   };
 
   // Cleanup URLs on unmount
@@ -200,6 +239,13 @@ function App() {
             const lighting = api.getLighting();
             if (lighting && typeof lighting.reflectionIntensity === 'number') {
               setReflectionIntensity(lighting.reflectionIntensity);
+            }
+            // Get initial glass visibility (if acrylic)
+            if (materialType === 'ACRYLIC') {
+              const glassVis = api.getGlassVisibility();
+              if (glassVis !== null) {
+                setGlassVisible(glassVis);
+              }
             }
           }}
           onError={(error) => {
@@ -516,6 +562,38 @@ function App() {
             </div>
           </div>
         </div>
+
+        {/* Glass Visibility Control (Acrylic only) */}
+        {materialType === 'ACRYLIC' && (
+          <div style={{ marginBottom: '20px' }}>
+            <h3 style={{ color: '#FFC107', marginTop: 0 }}>Glass Control</h3>
+            <button
+              onClick={handleToggleGlassVisibility}
+              disabled={isLoading}
+              style={{
+                width: '100%',
+                padding: '10px',
+                backgroundColor: glassVisible ? '#4CAF50' : '#666',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              {glassVisible ? '✓ Glass Visible' : '✗ Glass Hidden'}
+            </button>
+            <div style={{ 
+              fontSize: '10px', 
+              color: '#888', 
+              marginTop: '5px',
+              lineHeight: '1.4'
+            }}>
+              Toggle glass layer visibility to test artwork sharpness
+            </div>
+          </div>
+        )}
 
         {/* Info */}
         <div
