@@ -15,7 +15,7 @@ import * as THREE from "three";
  */
 // Metal color constants
 const METAL_COLOR_MAP = {
-  brushed_silver: new THREE.Color(0xe8e8f0), // Brushed silver - bright silver with slight blue tint (RGB: 232, 232, 240) for increased brightness
+  brushed_silver: new THREE.Color(0x9696a0), // Brushed silver - darker silver (RGB: 150, 150, 160) that maintains silver appearance when exposure is enhanced
   white: new THREE.Color(0xffffff), // White color
 };
 
@@ -33,17 +33,14 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   // This is critical for texture visibility - PhysicalMaterial with transmission can hide textures
   if (role === "PRINT" && !preset.requiresPhysical && mat.isMeshPhysicalMaterial) {
     const standardMat = new THREE.MeshStandardMaterial();
-    // CRITICAL: Preserve all texture maps - especially the map (artwork texture)
+    // CRITICAL: Only preserve the color map (artwork texture) - NO PBR maps for artwork layer
     if (mat.map) {
       standardMat.map = mat.map;
       // Ensure map texture is properly configured and visible
       standardMat.map.needsUpdate = true;
     }
-    if (mat.normalMap) standardMat.normalMap = mat.normalMap;
-    if (mat.roughnessMap) standardMat.roughnessMap = mat.roughnessMap;
-    if (mat.metalnessMap) standardMat.metalnessMap = mat.metalnessMap;
-    if (mat.aoMap) standardMat.aoMap = mat.aoMap;
-    if (mat.emissiveMap) standardMat.emissiveMap = mat.emissiveMap;
+    // Explicitly DO NOT copy PBR maps - artwork layer must be independent
+    // Only copy alphaMap if it exists (for transparency support)
     if (mat.alphaMap) standardMat.alphaMap = mat.alphaMap;
     standardMat.color.copy(mat.color || new THREE.Color(0xffffff));
     standardMat.name = mat.name;
@@ -135,13 +132,30 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     mat.transparent = false;
     mat.opacity = 1.0;
     
-    // CRITICAL: Ensure texture map is visible and properly configured
+    // CRITICAL: Ensure texture map is visible and properly configured with crisp settings
     if (mat.map) {
       mat.map.colorSpace = THREE.SRGBColorSpace;
-      mat.map.generateMipmaps = true;
-      mat.map.minFilter = THREE.LinearMipmapLinearFilter;
+      
+      // Check if texture is power-of-two for mipmap decision
+      const texWidth = mat.map.image?.naturalWidth || mat.map.image?.width || 0;
+      const texHeight = mat.map.image?.naturalHeight || mat.map.image?.height || 0;
+      const isPOT = texWidth > 0 && texHeight > 0 && 
+                   (texWidth & (texWidth - 1)) === 0 && 
+                   (texHeight & (texHeight - 1)) === 0;
+      
+      // Only enable mipmaps for power-of-two textures to avoid grain
+      mat.map.generateMipmaps = isPOT;
+      mat.map.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
       mat.map.magFilter = THREE.LinearFilter;
-      mat.map.anisotropy = renderer?.capabilities?.getMaxAnisotropy() || 16;
+      mat.map.premultiplyAlpha = true; // Prevent edge halos
+      
+      // Set anisotropy for better quality at oblique angles
+      if (renderer?.capabilities) {
+        mat.map.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+      } else {
+        mat.map.anisotropy = 16;
+      }
+      
       mat.map.needsUpdate = true; // Force texture update
     }
     
@@ -178,7 +192,12 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   if (role === "METAL") {
     // Apply metal color if provided
     if (metalColor && METAL_COLOR_MAP[metalColor]) {
-      mat.color.copy(METAL_COLOR_MAP[metalColor]);
+      // For white metal, use super white (HDR values) to make it clearly white, not silver-like
+      if (metalColor === "white") {
+        mat.color.setRGB(2.5, 2.5, 2.5); // Super white - much brighter than silver
+      } else {
+        mat.color.copy(METAL_COLOR_MAP[metalColor]);
+      }
     } else {
       mat.color.set(0xffffff); // Default to white if no specific color or invalid
     }

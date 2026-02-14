@@ -169,6 +169,50 @@ export function useMaterialUpdates({
         materialProcessorRef.current.getBaseEnvMapIntensities()
       );
     }
+    
+    // CRITICAL: Re-apply brightness to artwork layers and super white to white metal after material updates
+    // This ensures artwork brightness and white metal super white persist even if materials were updated
+    if (activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX") {
+      const metalColor = materialType.metalColor;
+      
+      model.traverse((obj) => {
+        if (!obj.isMesh || !obj.material) return;
+        const objName = obj.name || "";
+        const objNameLower = objName.toLowerCase();
+        
+        // Re-apply artwork brightness
+        const isArtwork = objName === "Artwork_FullBleed" || 
+                         objName === "Artwork_Shrunk" ||
+                         (objNameLower.includes("artwork") && 
+                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed") || objNameLower.includes("shrunk")));
+        
+        if (isArtwork) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((mat) => {
+            if (mat.color) {
+              mat.color.setRGB(0.5, 0.5, 0.5); // Re-apply moderate brightness
+              mat.needsUpdate = true;
+            }
+          });
+        }
+        
+        // Re-apply super white for white metal layers
+        const isWhiteMetal = (objNameLower.includes("white") && objNameLower.includes("metal")) ||
+                            objNameLower.includes("whitemetal");
+        
+        if (isWhiteMetal && metalColor === "white") {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((mat) => {
+            if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+              if (mat.metalness !== undefined && mat.metalness > 0.4 && mat.color) {
+                mat.color.setRGB(2.5, 2.5, 2.5); // Re-apply super white for white metal
+                mat.needsUpdate = true;
+              }
+            }
+          });
+        }
+      });
+    }
   }, [materialType.selectedMaterialType, materialType.materialTypeOverride, lighting, modelManagerRef, sceneManagerRef, environmentManagerRef, materialProcessorRef, materialType]);
 
   // Toggle environment map - handled by material module (skip for acrylics)

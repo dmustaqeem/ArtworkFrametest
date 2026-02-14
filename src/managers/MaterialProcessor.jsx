@@ -210,10 +210,10 @@ export class MaterialProcessor {
       const meshName = obj.name || "";
 
       mats.forEach((mat, matIndex) => {
-        // CRITICAL: For mirror materials, skip artwork layers that have already been modified
-        // Artwork layers maintain their own matte properties and should NEVER be re-processed
+        // CRITICAL: For mirror, metal, and metal box materials, skip artwork layers that have already been modified
+        // Artwork layers maintain their own brightness and properties and should NEVER be re-processed
         // This prevents them from being overwritten when UI controls trigger re-renders or material type changes
-        if (materialType === "MIRROR" && isArtworkLayer(obj, mat)) {
+        if ((materialType === "MIRROR" || materialType === "METAL" || materialType === "METAL_BOX") && isArtworkLayer(obj, mat)) {
           return; // Skip this material, preserve its properties
         }
         

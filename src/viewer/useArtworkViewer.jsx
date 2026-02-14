@@ -19,7 +19,8 @@ import {
   useMaterialUpdates,
 } from "../hooks/index.jsx";
 import { useTextureOperations } from "../hooks/useTextureOperations.jsx";
-import { SCENE_CONFIG, MATERIAL_CONFIG } from "../config/appConfig.jsx";
+import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG } from "../config/appConfig.jsx";
+import { TextureManager } from "../managers/TextureManager.jsx";
 import { findArtworkTextureLayer, findTextureLayer, getTextureLayersForMode } from "../utils/textureUtils.jsx";
 import { getArtworkMeshForMode, MODE_TYPES } from "../utils/meshUtils.jsx";
 import { exportModelToUSDZ } from "../utils/usdzUtils.jsx";
@@ -862,24 +863,73 @@ export function useArtworkViewer({
               mat.map.dispose();
             }
 
-            // Create texture from original image (no processing)
+            // Create texture with crisp settings for better quality and reduced grain
             const clonedTex = textureManagerRef.current
-              ? textureManagerRef.current.createTextureFromImage(texture.image, { flipY: false })
+              ? textureManagerRef.current.createTextureFromImage(texture.image, {
+                  flipY: false,
+                  crisp: true, // Use crisp settings for better quality
+                  maxAnisotropy: TEXTURE_CONFIG.MAX_ANISOTROPY,
+                  useRepeatWrapping: false, // Use ClampToEdge for artwork
+                  premultiplyAlpha: true, // Prevent edge halos
+                })
               : (() => {
                 const tex = new THREE.Texture(texture.image);
+                const texWidth = texture.image?.naturalWidth || texture.image?.width || 0;
+                const texHeight = texture.image?.naturalHeight || texture.image?.height || 0;
+                const isPOT = texWidth > 0 && texHeight > 0 && 
+                             TextureManager.isPowerOfTwo(texWidth) && 
+                             TextureManager.isPowerOfTwo(texHeight);
+                
                 tex.wrapS = THREE.ClampToEdgeWrapping;
                 tex.wrapT = THREE.ClampToEdgeWrapping;
-                tex.generateMipmaps = false;
-                tex.minFilter = THREE.LinearFilter;
+                tex.generateMipmaps = isPOT; // Enable mipmaps for power-of-two textures
+                tex.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
                 tex.magFilter = THREE.LinearFilter;
                 tex.colorSpace = THREE.SRGBColorSpace;
                 tex.flipY = false;
+                tex.premultiplyAlpha = true; // Prevent edge halos
+                
+                // Set anisotropy if renderer is available
+                const renderer = sceneManagerRef.current?.getRenderer();
+                if (renderer?.capabilities) {
+                  tex.anisotropy = Math.min(
+                    TEXTURE_CONFIG.MAX_ANISOTROPY,
+                    renderer.capabilities.getMaxAnisotropy()
+                  );
+                }
+                
                 tex.needsUpdate = true;
                 return tex;
               })();
 
             mat.map = clonedTex;
-
+            
+            // Ensure texture is properly configured after creation (apply crisp settings if not already)
+            if (mat.map) {
+              const texWidth = mat.map.image?.naturalWidth || mat.map.image?.width || 0;
+              const texHeight = mat.map.image?.naturalHeight || mat.map.image?.height || 0;
+              const isPOT = texWidth > 0 && texHeight > 0 && 
+                           TextureManager.isPowerOfTwo(texWidth) && 
+                           TextureManager.isPowerOfTwo(texHeight);
+              
+              // Apply crisp settings for better quality
+              mat.map.generateMipmaps = isPOT;
+              mat.map.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+              mat.map.magFilter = THREE.LinearFilter;
+              mat.map.premultiplyAlpha = true;
+              
+              // Set anisotropy if renderer is available
+              const renderer = sceneManagerRef.current?.getRenderer();
+              if (renderer?.capabilities) {
+                mat.map.anisotropy = Math.min(
+                  TEXTURE_CONFIG.MAX_ANISOTROPY,
+                  renderer.capabilities.getMaxAnisotropy()
+                );
+              }
+              
+              mat.map.needsUpdate = true;
+            }
+            
             // For metals: Copy brushed metal finish from corresponding metal background mesh
             if (isMetal && (isFullBleed || isShrunk)) {
               // Find the corresponding metal background mesh (Metal_Silver_FullBleed/Shrunk or Metal_White_FullBleed/Shrunk)
@@ -977,57 +1027,67 @@ export function useArtworkViewer({
                 });
               }
 
-              // Copy brushed metal finish if found
-              if (metalMatForMaps || metalMatForColor) {
-                // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
-                if (metalMatForMaps) {
-                  if (metalMatForMaps.normalMap) {
-                    mat.normalMap = metalMatForMaps.normalMap;
-                    if (mat.normalScale && metalMatForMaps.normalScale) {
-                      mat.normalScale.copy(metalMatForMaps.normalScale);
-                    }
-                  }
-                  if (metalMatForMaps.roughnessMap) {
-                    mat.roughnessMap = metalMatForMaps.roughnessMap;
-                  }
-                  if (metalMatForMaps.metalnessMap) {
-                    mat.metalnessMap = metalMatForMaps.metalnessMap;
-                  }
-                  if (metalMatForMaps.aoMap) {
-                    mat.aoMap = metalMatForMaps.aoMap;
-                    if (metalMatForMaps.aoMapIntensity !== undefined) {
-                      mat.aoMapIntensity = metalMatForMaps.aoMapIntensity;
-                    }
-                  }
-                  if (metalMatForMaps.emissiveMap) {
-                    mat.emissiveMap = metalMatForMaps.emissiveMap;
-                  }
-
-                  // Set material properties for metallic brushed finish
-                  mat.metalness = 1.0; // Make it metallic
-                  mat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 0.75; // Use frame's roughness (brushed: 0.75)
-
-                  // Copy environment map and intensity for reflections
-                  if (metalMatForMaps.envMap) {
-                    mat.envMap = metalMatForMaps.envMap;
-                  }
-                  if (metalMatForMaps.envMapIntensity !== undefined) {
-                    mat.envMapIntensity = metalMatForMaps.envMapIntensity;
-                  }
+            // Add very minimal metal PBR properties to artwork layer - just a tiny hint
+            mat.metalness = 0.1; // Very small amount of metalness
+            mat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
+            mat.envMapIntensity = 0.05; // Very minimal environment reflections
+            mat.envMap = null; // Use scene.environment
+            
+            // Copy very minimal PBR maps from metal material if available (for subtle metal effect)
+            if (metalMatForMaps) {
+              // Only copy normalMap and roughnessMap for subtle surface detail
+              if (metalMatForMaps.normalMap) {
+                mat.normalMap = metalMatForMaps.normalMap;
+                if (mat.normalScale && metalMatForMaps.normalScale) {
+                  mat.normalScale.set(0.3, 0.3); // Very subtle normal map intensity
+                } else if (mat.normalScale) {
+                  mat.normalScale.set(0.3, 0.3);
                 }
-
-                // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
-                if (metalMatForColor && metalMatForColor.color) {
-                  mat.color.copy(metalMatForColor.color);
-                } else if (metalMatForMaps && metalMatForMaps.color) {
-                  // Fallback: use color from corresponding mesh if FullBleed not found
-                  mat.color.copy(metalMatForMaps.color);
-                }
-              } else {
-                // Fallback: Set metal properties even if frame material not found
-                mat.metalness = 1.0;
-                mat.roughness = 0.75; // Default to brushed finish
               }
+              if (metalMatForMaps.roughnessMap) {
+                mat.roughnessMap = metalMatForMaps.roughnessMap;
+              }
+            } else {
+              // Remove other PBR maps if no metal material found
+              mat.metalnessMap = null;
+            }
+            
+            // Remove other PBR maps - artwork layer doesn't need them
+            mat.aoMap = null;
+            mat.emissiveMap = null;
+            mat.displacementMap = null;
+            mat.bumpMap = null;
+            mat.clearcoatMap = null;
+            mat.clearcoatNormalMap = null;
+            mat.clearcoatRoughnessMap = null;
+            mat.sheenColorMap = null;
+            mat.sheenRoughnessMap = null;
+            mat.aoMap = null;
+            mat.emissiveMap = null;
+            mat.displacementMap = null;
+            mat.bumpMap = null;
+            mat.clearcoatMap = null;
+            mat.clearcoatNormalMap = null;
+            mat.clearcoatRoughnessMap = null;
+            mat.sheenColorMap = null;
+            mat.sheenRoughnessMap = null;
+            
+            // Remove all clearcoat and specular properties
+            if (mat.clearcoat !== undefined) mat.clearcoat = 0.0;
+            if (mat.clearcoatRoughness !== undefined) mat.clearcoatRoughness = 1.0;
+            if (mat.specularIntensity !== undefined) mat.specularIntensity = 0.0;
+            if (mat.sheen !== undefined) mat.sheen = 0.0;
+            
+            // Set bright white color for artwork - use moderate multiplier for balanced brightness
+            // Tone mapping will handle HDR values properly without washing out texture
+            if (mat.color) {
+              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+            }
+            // Remove emissive to prevent washing out the texture
+            if (mat.emissive !== undefined) {
+              mat.emissive.setRGB(0, 0, 0);
+              mat.emissiveIntensity = 0.0;
+            }
 
               // Apply minimal transparency settings (matching working test app)
               mat.transparent = true;

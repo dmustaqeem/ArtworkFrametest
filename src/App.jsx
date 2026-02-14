@@ -29,6 +29,7 @@ function App() {
   const [frameFile, setFrameFile] = useState(null);
   const [hdrFile, setHdrFile] = useState(null); // HDR for non-mirror materials
   const [hdrMirrorFile, setHdrMirrorFile] = useState(null); // HDR for mirror material
+  const [backgroundFile, setBackgroundFile] = useState(null); // Background image
   const [isLoading, setIsLoading] = useState(false);
 
   // Store blob URLs for texture loading (textures can use blob URLs)
@@ -36,6 +37,7 @@ function App() {
   const [frameUrl, setFrameUrl] = useState(null);
   const [hdrUrl, setHdrUrl] = useState(null); // HDR URL for non-mirror materials
   const [hdrMirrorUrl, setHdrMirrorUrl] = useState(null); // HDR URL for mirror material
+  const [backgroundUrl, setBackgroundUrl] = useState(null); // Background image URL
 
   // Handle file uploads
   const handleModelUpload = (e) => {
