@@ -85,13 +85,35 @@ export const applyMetalPreset = (material, preset, renderer, role, options = {})
   // BaseMaterial will handle downgrading PhysicalMaterial to StandardMaterial for PRINT if needed
   const updatedMat = applyPreset(material, preset, renderer, role, options);
   
-  // For PRINT role (artwork layer), ensure texture is visible with very minimal metal PBR
+  // For PRINT role (artwork layer), apply metal PBR based on metal color
   if (role === "PRINT") {
-    // Add very minimal metal PBR properties - just a tiny hint of metal
-    updatedMat.metalness = 0.1; // Very small amount of metalness
-    updatedMat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
-    updatedMat.envMapIntensity = 0.05; // Very minimal environment reflections
-    // Keep envMap as null to use scene.environment
+    const { metalColor, metalFinish = "brushed" } = options;
+    
+    // For metal silver, apply proper metal PBR properties
+    if (metalColor === "brushed_silver") {
+      // Apply proper metal PBR for silver artwork layer - full metalness for complete blending
+      updatedMat.metalness = 1.0; // Full metalness for complete metallic blending with metal layer
+      
+      // Set roughness based on metal finish - match metal layer appearance
+      if (metalFinish === "polished") {
+        updatedMat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
+        updatedMat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
+      } else {
+        // brushed finish - match metal layer's fully matte appearance
+        updatedMat.roughness = 3.0; // Maximum roughness - fully matte like metal layer
+        updatedMat.envMapIntensity = 0.05; // Very minimal reflections for brushed finish
+      }
+      
+      // Keep envMap as null to use scene.environment
+      updatedMat.envMap = null;
+    } else {
+      // For non-silver metals (white, etc.), use minimal metal PBR
+      // Add very minimal metal PBR properties - just a tiny hint of metal
+      updatedMat.metalness = 0.1; // Very small amount of metalness
+      updatedMat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
+      updatedMat.envMapIntensity = 0.05; // Very minimal environment reflections
+      // Keep envMap as null to use scene.environment
+    }
     
     // Remove all PBR maps - artwork layer only uses color map
     updatedMat.normalMap = null;
@@ -116,10 +138,12 @@ export const applyMetalPreset = (material, preset, renderer, role, options = {})
     // Enable tone mapping so exposure affects brightness (same clarity as acrylics)
     updatedMat.toneMapped = true;
     
-    // Ensure transparent for PNG alpha support
+    // Ensure transparent for PNG alpha support - alpha areas will show metal background
     updatedMat.transparent = true;
     updatedMat.opacity = 1.0;
     updatedMat.alphaTest = 0.001; // Very small alpha test to help with transparency
+    updatedMat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
+    updatedMat.depthTest = true; // Enable depth testing for proper layering
     
     // Don't apply transmission to artwork layer (BaseMaterial already handles this, but ensure it)
     if (updatedMat.isMeshPhysicalMaterial) {
@@ -150,10 +174,17 @@ export const applyMetalPreset = (material, preset, renderer, role, options = {})
       updatedMat.map.needsUpdate = true;
     }
     
-    // Make artwork layer much brighter - use higher multiplier like mirror back (3.0)
-    // Tone mapping will handle HDR values properly
+    // Apply color tint to blend with metal layer
     if (updatedMat.color) {
-      updatedMat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+      if (metalColor === "brushed_silver") {
+        // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
+        // Metal color is RGB(150, 150, 160) = normalized (0.588, 0.588, 0.627)
+        // Use very bright version for artwork to maintain visibility while keeping metal tint
+        updatedMat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
+      } else {
+        // For other metals, use neutral brightness
+        updatedMat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+      }
     }
     // Remove emissive to prevent washing out the texture
     if (updatedMat.emissive !== undefined) {
@@ -361,12 +392,20 @@ export const updateMetalReflectionIntensity = (model, reflectionIntensity, baseE
 /**
  * Updates metal materials when metal finish changes
  */
-export const updateMetalFinish = (model, metalFinish) => {
+export const updateMetalFinish = (model, metalFinish, metalColor = null) => {
   if (!model) return;
   
   const METAL_FINISH_PRESETS = {
-    polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-    brushed: { roughness: 3.0 }, // Maximum roughness for fully matte finish
+    polished: { 
+      roughness: 0.05, // Very smooth, highly reflective, mirror-like (background metal)
+      roughnessArtwork: 0.05, // Same for artwork layer - match metal layer
+      envMapIntensityArtwork: 0.1 // Very minimal environment reflections for polished artwork
+    },
+    brushed: { 
+      roughness: 3.0, // Maximum roughness for fully matte finish (background metal)
+      roughnessArtwork: 3.0, // Maximum roughness - fully matte like metal layer
+      envMapIntensityArtwork: 0.05 // Very minimal reflections for brushed finish artwork
+    },
   };
   
   const finishPreset = METAL_FINISH_PRESETS[metalFinish];
@@ -377,7 +416,19 @@ export const updateMetalFinish = (model, metalFinish) => {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-        if (mat.metalness !== undefined && mat.metalness > 0.4) {
+        // Check if this is an artwork layer for silver (has texture map and full metalness)
+        const isArtworkLayerForSilver = mat.map && 
+                                       mat.metalness !== undefined && 
+                                       mat.metalness >= 0.9 && 
+                                       metalColor === "brushed_silver";
+        
+        if (isArtworkLayerForSilver) {
+          // Update artwork layer PBR properties for metal silver
+          mat.roughness = finishPreset.roughnessArtwork;
+          mat.envMapIntensity = finishPreset.envMapIntensityArtwork;
+          mat.needsUpdate = true;
+        } else if (mat.metalness !== undefined && mat.metalness > 0.4) {
+          // Update other metal materials (background metal layers)
           mat.roughness = finishPreset.roughness;
           mat.needsUpdate = true;
         }
@@ -417,8 +468,12 @@ export const updateMetalColor = (model, metalColor) => {
           mat.needsUpdate = true;
         }
         // Also update PRINT role materials (artwork layers with texture maps)
-        // For artwork layers, keep the brightness at 0.5 (set in preset) - don't apply metal color
-        // Artwork should maintain its own color settings
+        // For silver artwork layers, apply brighter silver color for visibility
+        if (mat.map && metalColor === "brushed_silver") {
+          // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
+          mat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
+          mat.needsUpdate = true;
+        }
       }
     });
   });

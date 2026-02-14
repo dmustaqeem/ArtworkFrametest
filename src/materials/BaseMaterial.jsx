@@ -48,6 +48,10 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     standardMat.transparent = mat.transparent || false;
     standardMat.opacity = mat.opacity !== undefined ? mat.opacity : 1.0;
     standardMat.side = mat.side !== undefined ? mat.side : THREE.FrontSide;
+    // Preserve depth settings for transparency (alpha areas showing background)
+    standardMat.depthWrite = mat.depthWrite !== undefined ? mat.depthWrite : false;
+    standardMat.depthTest = mat.depthTest !== undefined ? mat.depthTest : true;
+    standardMat.alphaTest = mat.alphaTest !== undefined ? mat.alphaTest : 0.001;
     mat = standardMat;
   }
   

@@ -1027,15 +1027,40 @@ export function useArtworkViewer({
                 });
               }
 
-            // Add very minimal metal PBR properties to artwork layer - just a tiny hint
-            mat.metalness = 0.1; // Very small amount of metalness
-            mat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
-            mat.envMapIntensity = 0.05; // Very minimal environment reflections
+            // Apply proper metal PBR properties to artwork layer based on metal color
+            const metalColor = materialType.metalColor;
+            const metalFinish = lighting.metalFinish || "brushed";
+            
+            if (metalColor === "brushed_silver") {
+              // Apply full metal PBR for silver artwork layer - complete blending with metal
+              mat.metalness = 1.0; // Full metalness for complete metallic blending
+              
+              // Set roughness based on metal finish - match metal layer appearance
+              if (metalFinish === "polished") {
+                mat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
+                mat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
+              } else {
+                // brushed finish - match metal layer's fully matte appearance
+                mat.roughness = 3.0; // Maximum roughness - fully matte like metal layer
+                mat.envMapIntensity = 0.05; // Very minimal reflections for brushed finish
+              }
+              
+              // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
+              mat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
+            } else {
+              // For non-silver metals (white, etc.), use minimal metal PBR
+              mat.metalness = 0.1; // Very small amount of metalness
+              mat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
+              mat.envMapIntensity = 0.05; // Very minimal environment reflections
+              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+            }
+            
             mat.envMap = null; // Use scene.environment
             
-            // Copy very minimal PBR maps from metal material if available (for subtle metal effect)
-            if (metalMatForMaps) {
-              // Only copy normalMap and roughnessMap for subtle surface detail
+            // For silver, don't copy PBR maps - we're using direct roughness/metalness values for blending
+            // For non-silver metals, optionally copy minimal PBR maps if needed
+            if (metalColor !== "brushed_silver" && metalMatForMaps) {
+              // Only copy normalMap for subtle surface detail (non-silver only)
               if (metalMatForMaps.normalMap) {
                 mat.normalMap = metalMatForMaps.normalMap;
                 if (mat.normalScale && metalMatForMaps.normalScale) {
@@ -1044,11 +1069,15 @@ export function useArtworkViewer({
                   mat.normalScale.set(0.3, 0.3);
                 }
               }
-              if (metalMatForMaps.roughnessMap) {
-                mat.roughnessMap = metalMatForMaps.roughnessMap;
-              }
+            }
+            
+            // Remove all PBR maps for silver to ensure our direct values are used
+            if (metalColor === "brushed_silver") {
+              mat.normalMap = null;
+              mat.roughnessMap = null;
+              mat.metalnessMap = null;
             } else {
-              // Remove other PBR maps if no metal material found
+              // For non-silver, remove metalnessMap
               mat.metalnessMap = null;
             }
             
@@ -1078,10 +1107,10 @@ export function useArtworkViewer({
             if (mat.specularIntensity !== undefined) mat.specularIntensity = 0.0;
             if (mat.sheen !== undefined) mat.sheen = 0.0;
             
-            // Set bright white color for artwork - use moderate multiplier for balanced brightness
-            // Tone mapping will handle HDR values properly without washing out texture
-            if (mat.color) {
-              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+            // Color is already set above based on metal color (silver gets exact metal color, others get 0.5)
+            // Only set if not already set for silver
+            if (mat.color && metalColor !== "brushed_silver") {
+              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for non-silver artwork
             }
             // Remove emissive to prevent washing out the texture
             if (mat.emissive !== undefined) {
@@ -1089,11 +1118,12 @@ export function useArtworkViewer({
               mat.emissiveIntensity = 0.0;
             }
 
-              // Apply minimal transparency settings (matching working test app)
+              // Apply transparency settings for alpha areas to show metal background
               mat.transparent = true;
               mat.opacity = 1.0;
-              mat.alphaTest = 0.001; // Very small alpha test (matches working app)
-              mat.depthWrite = true; // Proper depth rendering (matches working app)
+              mat.alphaTest = 0.001; // Very small alpha test to help with transparency
+              mat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
+              mat.depthTest = true; // Enable depth testing for proper layering
               // Don't set side property - let material use its original setting
             }
 
