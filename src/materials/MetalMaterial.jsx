@@ -8,21 +8,25 @@ import { applyPreset } from "./BaseMaterial.jsx";
 
 export const METAL_PRESET = {
   PRINT: {
-    metalness: 0,
-    roughness: 3.0, // Maximum roughness - no reflections at all
+    metalness: 1.0, // Full metalness for complete metallic blending with metal layer
+    roughness: 0.95, // Extremely low shininess - very matte brushed metal (same as metal layer)
     clearcoat: 0,
     clearcoatRoughness: 0,
-    envBase: 0.0, // Zero reflection intensity for artwork layer
+    envBase: 0.0, // No reflections on metal
     specularIntensity: 0.0, // No specular for fully matte finish
     keepMaps: ["map"], // Only keep color map, remove PBR maps
-    requiresPhysical: false, // Use StandardMaterial for texture visibility
+    requiresPhysical: true, // Use PhysicalMaterial for anisotropy support
+    anisotropy: 0.15, // Minimal brushed directional highlight (same as metal layer)
+    anisotropyRotation: 0.0, // Brush direction (radians)
     renderOrder: 2, // Render on top of metal background (Silver_FullBleed/Shrunk)
   },
   METAL: {
     metalness: 1.0,
-    roughness: 3.0, // Maximum roughness for fully matte finish (no reflections)
-    envBase: 0.0, // Zero reflection intensity - completely disable reflections
-    requiresPhysical: false, // Can use Standard or Physical
+    roughness: 0.95, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
+    envBase: 0.0, // No reflections on metal
+    requiresPhysical: true, // Use PhysicalMaterial for anisotropy support
+    anisotropy: 0.15, // Minimal brushed directional highlight (very reduced for less shininess)
+    anisotropyRotation: 0.0, // Brush direction (radians)
     renderOrder: 1, // Render below artwork (PRINT layer)
   },
   DEFAULT: {
@@ -36,7 +40,7 @@ export const METAL_PRESET = {
 // Metal finish presets
 export const METAL_FINISH_PRESETS = {
   polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-  brushed: { roughness: 3.0 }, // Maximum roughness for fully matte finish
+  brushed: { roughness: 0.95 }, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
 };
 
 /**
@@ -94,14 +98,20 @@ export const applyMetalPreset = (material, preset, renderer, role, options = {})
       // Apply proper metal PBR for silver artwork layer - full metalness for complete blending
       updatedMat.metalness = 1.0; // Full metalness for complete metallic blending with metal layer
       
-      // Set roughness based on metal finish - match metal layer appearance
+      // Set roughness based on metal finish - very little reflectiveness for metal-like appearance
       if (metalFinish === "polished") {
         updatedMat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
         updatedMat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
       } else {
-        // brushed finish - match metal layer's fully matte appearance
-        updatedMat.roughness = 3.0; // Maximum roughness - fully matte like metal layer
-        updatedMat.envMapIntensity = 0.05; // Very minimal reflections for brushed finish
+        // brushed finish - extremely low shininess very matte brushed metal
+        updatedMat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
+        updatedMat.envMapIntensity = 0.0; // No reflections on metal
+      }
+      
+      // Apply anisotropy for brushed metal directional highlight (same as metal layer)
+      if (updatedMat.isMeshPhysicalMaterial && metalFinish === "brushed") {
+        if (updatedMat.anisotropy !== undefined) updatedMat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
+        if (updatedMat.anisotropyRotation !== undefined) updatedMat.anisotropyRotation = 0.0; // Brush direction
       }
       
       // Keep envMap as null to use scene.environment
@@ -139,9 +149,11 @@ export const applyMetalPreset = (material, preset, renderer, role, options = {})
     updatedMat.toneMapped = true;
     
     // Ensure transparent for PNG alpha support - alpha areas will show metal background
+    // Use alphaToCoverage to reduce white halo around text edges
     updatedMat.transparent = true;
     updatedMat.opacity = 1.0;
-    updatedMat.alphaTest = 0.001; // Very small alpha test to help with transparency
+    updatedMat.alphaTest = 0.08; // Higher threshold to remove white fringe pixels (0.05-0.15 range)
+    updatedMat.alphaToCoverage = true; // Important: reduces fringes while keeping edges smooth (needs MSAA)
     updatedMat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
     updatedMat.depthTest = true; // Enable depth testing for proper layering
     
@@ -315,14 +327,26 @@ export const updateMetalMaterials = (model, envMap, showReflections, reflectionI
         mat.envMap = null; // Use scene.environment
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
-          // Completely disable reflections for metals - set to zero
-          mat.envMapIntensity = 0.0;
+          // Apply very little reflectiveness - subtle reflections
+          mat.envMapIntensity = 0.15; // Very little reflectiveness - slightly increased for subtle reflections
+        } else {
+          // Default very little reflectiveness if no base intensity stored
+          mat.envMapIntensity = 0.15;
         }
         
-        // Force maximum roughness for ALL materials in metal models - no reflections
+        // Apply extremely low shininess very matte brushed metal appearance - use correct roughness range
         if (mat.roughness !== undefined) {
-          mat.roughness = 3.0;
+          mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
         }
+        
+        // Apply minimal anisotropy for brushed metal directional highlight (requires PhysicalMaterial)
+        if (mat.isMeshPhysicalMaterial) {
+          if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
+          if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
+        }
+        
+        // Set envMapIntensity to zero - no reflections on metal
+        mat.envMapIntensity = 0.0; // No reflections on metal
         
         // CRITICAL: Re-apply super white for white metal layers to prevent it from being reset
         if (isWhiteMetal && mat.metalness !== undefined && mat.metalness > 0.4) {
@@ -369,14 +393,26 @@ export const updateMetalReflectionIntensity = (model, reflectionIntensity, baseE
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
         const baseIntensity = baseEnvMapIntensities.get(mat);
         if (baseIntensity !== undefined) {
-          // Completely disable reflections for metals - set to zero
-          mat.envMapIntensity = 0.0;
+          // Apply very little reflectiveness - subtle reflections
+          mat.envMapIntensity = 0.15; // Very little reflectiveness - slightly increased for subtle reflections
+        } else {
+          // Default very little reflectiveness if no base intensity stored
+          mat.envMapIntensity = 0.15;
         }
         
-        // Force maximum roughness for ALL materials in metal models - no reflections
+        // Apply extremely low shininess very matte brushed metal appearance - use correct roughness range
         if (mat.roughness !== undefined) {
-          mat.roughness = 3.0;
+          mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
         }
+        
+        // Apply minimal anisotropy for brushed metal directional highlight (requires PhysicalMaterial)
+        if (mat.isMeshPhysicalMaterial) {
+          if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
+          if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
+        }
+        
+        // Set envMapIntensity to zero - no reflections on metal
+        mat.envMapIntensity = 0.0; // No reflections on metal
         
         // CRITICAL: Re-apply super white for white metal layers to prevent it from being reset
         if (isWhiteMetal && mat.metalness !== undefined && mat.metalness > 0.4) {
@@ -399,12 +435,14 @@ export const updateMetalFinish = (model, metalFinish, metalColor = null) => {
     polished: { 
       roughness: 0.05, // Very smooth, highly reflective, mirror-like (background metal)
       roughnessArtwork: 0.05, // Same for artwork layer - match metal layer
-      envMapIntensityArtwork: 0.1 // Very minimal environment reflections for polished artwork
+      envMapIntensityArtwork: 0.1, // Very minimal environment reflections for polished artwork
+      envMapIntensityMetal: 0.1 // Very minimal reflections for polished metal layer
     },
     brushed: { 
-      roughness: 3.0, // Maximum roughness for fully matte finish (background metal)
-      roughnessArtwork: 3.0, // Maximum roughness - fully matte like metal layer
-      envMapIntensityArtwork: 0.05 // Very minimal reflections for brushed finish artwork
+      roughness: 0.95, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR) (background metal)
+      roughnessArtwork: 0.95, // Extremely low shininess - very matte brushed metal for artwork
+      envMapIntensityArtwork: 0.0, // No reflections on artwork
+      envMapIntensityMetal: 0.0 // No reflections on metal layer
     },
   };
   
@@ -423,13 +461,33 @@ export const updateMetalFinish = (model, metalFinish, metalColor = null) => {
                                        metalColor === "brushed_silver";
         
         if (isArtworkLayerForSilver) {
-          // Update artwork layer PBR properties for metal silver
+          // Update artwork layer PBR properties for metal silver - match metal layer exactly
           mat.roughness = finishPreset.roughnessArtwork;
           mat.envMapIntensity = finishPreset.envMapIntensityArtwork;
+          // Apply anisotropy for brushed metal directional highlight (same as metal layer)
+          if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
+            if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
+            if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
+          }
           mat.needsUpdate = true;
         } else if (mat.metalness !== undefined && mat.metalness > 0.4) {
           // Update other metal materials (background metal layers)
           mat.roughness = finishPreset.roughness;
+          // Apply proper envMapIntensity to metal layer
+          if (finishPreset.envMapIntensityMetal !== undefined) {
+            mat.envMapIntensity = finishPreset.envMapIntensityMetal;
+          }
+          // Apply minimal anisotropy for brushed metal directional highlight
+          if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
+            if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
+            if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
+          }
+          // Apply prominent sheen for metallic appearance
+          if (mat.isMeshPhysicalMaterial) {
+            if (mat.sheen !== undefined) mat.sheen = 0.4; // Prominent sheen
+            if (mat.sheenRoughness !== undefined) mat.sheenRoughness = 0.3; // Concentrated sheen
+            if (mat.sheenColor !== undefined) mat.sheenColor.set(0xffffff); // White sheen
+          }
           mat.needsUpdate = true;
         }
       }

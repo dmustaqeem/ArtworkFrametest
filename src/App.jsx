@@ -1,30 +1,19 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
-import { GlbTextureSwapTester } from './demo/index.jsx';
-import { CURRENT_APP_MODE, APP_MODE, UI_CONFIG } from './config/appConfig.jsx';
+import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity } from './config/appConfig.jsx';
 import './App.css';
 
 function App() {
-  // Switch between API test mode and demo mode
-  // Change CURRENT_APP_MODE in appConfig.jsx to switch modes
-  if (CURRENT_APP_MODE === APP_MODE.DEMO) {
-    return (
-      <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
-        <GlbTextureSwapTester />
-      </div>
-    );
-  }
-
   // API Test Mode - Simplified interface
   const viewerRef = useRef(null);
-  const [status, setStatus] = useState('Ready - Upload model and texture to start');
+  const [status, setStatus] = useState('Ready - Upload artwork texture to start');
   const [currentMode, setCurrentMode] = useState('fullBleed');
   const [materialType, setMaterialType] = useState('ACRYLIC');
-  const [reflectionIntensity, setReflectionIntensity] = useState(0.2);
+  const [reflectionIntensity, setReflectionIntensity] = useState(() => getDefaultReflectionIntensity('ACRYLIC'));
   const [glassVisible, setGlassVisible] = useState(true);
   
   // File state - store File objects directly
-  const [modelFile, setModelFile] = useState(null);
+  // Note: modelFile is no longer needed as models are loaded automatically based on material type
   const [artworkFile, setArtworkFile] = useState(null);
   const [frameFile, setFrameFile] = useState(null);
   const [hdrFile, setHdrFile] = useState(null); // HDR for non-mirror materials
@@ -40,14 +29,7 @@ function App() {
   const [backgroundUrl, setBackgroundUrl] = useState(null); // Background image URL
 
   // Handle file uploads
-  const handleModelUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setModelFile(file);
-      setStatus(`Model uploaded: ${file.name}`);
-    }
-  };
-
+  // Note: Model upload is no longer needed - models are loaded automatically based on material type
   const handleArtworkUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -106,10 +88,6 @@ function App() {
 
   // Setup scene with uploaded files
   const handleSetup = async () => {
-    if (!modelFile) {
-      setStatus('Error: Please upload a model file');
-      return;
-    }
     if (!artworkUrl) {
       setStatus('Error: Please upload an artwork texture');
       return;
@@ -119,25 +97,32 @@ function App() {
     setStatus('Setting up scene...');
 
     try {
+      // Get material type info (convert display type to internal type)
+      const { internalType } = getMaterialTypeInfo(materialType);
+      
+      // Get model path based on material type (models are automatically loaded from assets)
+      const modelPath = getModelPath(materialType);
+      
       // Determine which HDR to use based on material type
       // Pass File object directly - EnvironmentManager will handle it
-      const customHdrPath = materialType === 'MIRROR' 
+      const customHdrPath = internalType === 'MIRROR' 
         ? (hdrMirrorFile || undefined)
         : (hdrFile || undefined);
 
-      // Pass File object directly for model (ModelManager handles it)
+      // Pass model path as string (ModelManager handles both File objects and paths)
       // Pass blob URL for textures and HDR (TextureLoader handles blob URLs fine)
+      // Use internal type for setMaterialType
       await viewerRef.current?.setup({
-        modelPath: modelFile, // Pass File object directly
+        modelPath: modelPath, // Auto-loaded model path based on material type
         artworkTexture: artworkUrl,
-        materialType: materialType,
+        materialType: internalType, // Use internal type for viewer
         frameTexture: frameUrl || undefined,
         hdriPath: customHdrPath, // Custom HDR path based on material type
         mode: currentMode,
       });
       
       // Sync glass visibility after setup (if acrylic)
-      if (materialType === 'ACRYLIC' && viewerRef.current) {
+      if (internalType === 'ACRYLIC' && viewerRef.current) {
         const glassVis = viewerRef.current.getGlassVisibility();
         if (glassVis !== null) {
           setGlassVisible(glassVis);
@@ -207,33 +192,85 @@ function App() {
   };
 
   // Change material type
-  const handleMaterialChange = (type) => {
-    setMaterialType(type);
-    viewerRef.current?.setMaterialType(type);
-    setStatus(`Material changed to: ${type}`);
+  const handleMaterialChange = async (displayType) => {
+    // Get internal type and metal finish from display type
+    const { internalType } = getMaterialTypeInfo(displayType);
     
-    // Update HDR when material type changes (if custom HDRs are uploaded)
-    if (viewerRef.current) {
-      // Pass File object directly - EnvironmentManager will handle it
-      const customHdrPath = type === 'MIRROR' 
-        ? (hdrMirrorFile || undefined)
-        : (hdrFile || undefined);
+    setMaterialType(displayType);
+    
+    // Update reflection intensity to material-specific default
+    const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
+    setReflectionIntensity(defaultReflectionIntensity);
+    
+    setStatus(`Material changed to: ${displayType}...`);
+    
+    // If artwork is already loaded, automatically call setup to reconfigure pipeline for new material type
+    if (artworkUrl) {
+      if (!viewerRef.current) {
+        setStatus(`Material changed to: ${displayType} - Waiting for viewer...`);
+        // Retry after a short delay
+        setTimeout(() => handleMaterialChange(displayType), 500);
+        return;
+      }
       
-      if (customHdrPath) {
-        // Load the custom HDR for the new material type
-        viewerRef.current.loadHDRI(customHdrPath).catch((error) => {
-          console.error('Failed to load custom HDR:', error);
-          setStatus(`Failed to load HDR: ${error.message}`);
+      if (typeof viewerRef.current.setup !== 'function') {
+        setStatus(`Material changed to: ${displayType} - Setup function not available`);
+        return;
+      }
+      
+      setIsLoading(true);
+      try {
+        // Get new model path based on display type
+        const newModelPath = getModelPath(displayType);
+        
+        // Determine which HDR to use based on internal material type
+        const customHdrPath = internalType === 'MIRROR' 
+          ? (hdrMirrorFile || undefined)
+          : (hdrFile || undefined);
+        
+        console.log(`[Material Change] Automatically calling setup for ${displayType} (${internalType})`);
+        
+        // Automatically call setup to reconfigure the entire pipeline for the new material type
+        // This ensures all material-specific configurations are properly applied
+        await viewerRef.current.setup({
+          modelPath: newModelPath,
+          artworkTexture: artworkUrl,
+          materialType: internalType, // Use internal type for viewer
+          frameTexture: frameUrl || undefined,
+          hdriPath: customHdrPath,
+          mode: currentMode,
         });
+        
+        // Update reflection intensity after setup (setup may reset it)
+        if (viewerRef.current && typeof viewerRef.current.setReflectionIntensity === 'function') {
+          viewerRef.current.setReflectionIntensity(defaultReflectionIntensity);
+        }
+        
+        // Sync glass visibility after setup (if acrylic)
+        if (internalType === 'ACRYLIC' && viewerRef.current) {
+          const glassVis = viewerRef.current.getGlassVisibility();
+          if (glassVis !== null) {
+            setGlassVisible(glassVis);
+          } else if (typeof viewerRef.current.setGlassVisibility === 'function') {
+            viewerRef.current.setGlassVisibility(glassVisible);
+          }
+        }
+        
+        console.log(`[Material Change] Setup completed successfully for ${displayType}`);
+        setStatus(`Material changed to: ${displayType} - Scene reconfigured automatically`);
+      } catch (error) {
+        console.error('Failed to reconfigure scene with new material:', error);
+        setStatus(`Error: Failed to load model for ${displayType} - ${error.message}`);
+      } finally {
+        setIsLoading(false);
       }
-    }
-    
-    // Update glass visibility state when switching to/from acrylic
-    if (type === 'ACRYLIC' && viewerRef.current) {
-      const glassVis = viewerRef.current.getGlassVisibility();
-      if (glassVis !== null) {
-        setGlassVisible(glassVis);
+    } else {
+      // No artwork loaded yet - just update the material type
+      // Setup will be called automatically when artwork is uploaded
+      if (viewerRef.current && typeof viewerRef.current.setMaterialType === 'function') {
+        viewerRef.current.setMaterialType(internalType);
       }
+      setStatus(`Material changed to: ${displayType} - Upload artwork to load model`);
     }
   };
 
@@ -246,7 +283,8 @@ function App() {
 
   // Handle glass visibility toggle (acrylic only)
   const handleToggleGlassVisibility = () => {
-    if (materialType !== 'ACRYLIC') {
+    const { internalType } = getMaterialTypeInfo(materialType);
+    if (internalType !== 'ACRYLIC') {
       setStatus('Glass visibility control is only available for ACRYLIC material type');
       return;
     }
@@ -277,7 +315,7 @@ function App() {
       width: '100vw',
       height: '100vh',
       display: 'flex',
-      background: UI_CONFIG.background.gradient, // Match demo mode background
+      background: UI_CONFIG.background.gradient,
     }}>
       {/* Viewer */}
       <div style={{ 
@@ -292,14 +330,16 @@ function App() {
           ref={viewerRef}
           onReady={(api) => {
             console.log('Viewer ready!', api);
-            setStatus('Viewer ready - Upload files to start');
-            // Get initial reflection intensity from API
-            const lighting = api.getLighting();
-            if (lighting && typeof lighting.reflectionIntensity === 'number') {
-              setReflectionIntensity(lighting.reflectionIntensity);
+            setStatus('Viewer ready - Upload artwork texture to start');
+            // Use material-specific default reflection intensity for ACRYLIC and MIRROR
+            const { internalType: currentInternalType } = getMaterialTypeInfo(materialType);
+            const defaultReflectionIntensity = getDefaultReflectionIntensity(currentInternalType);
+            setReflectionIntensity(defaultReflectionIntensity);
+            if (api.setReflectionIntensity) {
+              api.setReflectionIntensity(defaultReflectionIntensity);
             }
             // Get initial glass visibility (if acrylic)
-            if (materialType === 'ACRYLIC') {
+            if (currentInternalType === 'ACRYLIC') {
               const glassVis = api.getGlassVisibility();
               if (glassVis !== null) {
                 setGlassVisible(glassVis);
@@ -356,31 +396,14 @@ function App() {
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>File Uploads</h3>
           
-          {/* Model Upload */}
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
-              Model (GLB) *
-            </label>
-            <input
-              type="file"
-              accept=".glb"
-              onChange={handleModelUpload}
-              style={{
-                width: '100%',
-                padding: '8px',
-                fontSize: '11px',
-                backgroundColor: '#333',
-                color: 'white',
-                border: '1px solid #555',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            />
-            {modelFile && (
-              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
-                ✓ {modelFile.name}
-              </div>
-            )}
+          {/* Model Info - Auto-loaded based on material type */}
+          <div style={{ marginBottom: '15px', padding: '8px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
+            <div style={{ fontSize: '11px', color: '#4CAF50', marginBottom: '5px' }}>
+              ✓ Model: Auto-loaded based on material type
+            </div>
+            <div style={{ fontSize: '10px', color: '#aaa' }}>
+              Current: {getMaterialTypeDisplayName(materialType)}
+            </div>
           </div>
 
           {/* Artwork Texture Upload */}
@@ -496,13 +519,21 @@ function App() {
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>Material Type</h3>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
-            {['ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'].map((type) => (
+            {[
+              { value: 'ACRYLIC', label: 'Acrylic' },
+              { value: 'METAL_SILVER', label: 'Metal - Silver' },
+              { value: 'METAL_WHITE', label: 'Metal - White' },
+              { value: 'METAL_BOX_SILVER', label: 'Metal Box - Silver' },
+              { value: 'METAL_BOX_WHITE', label: 'Metal Box - White' },
+              { value: 'WOOD', label: 'Wood' },
+              { value: 'MIRROR', label: 'Mirror' },
+            ].map((option) => (
               <button
-                key={type}
-                onClick={() => handleMaterialChange(type)}
+                key={option.value}
+                onClick={() => handleMaterialChange(option.value)}
                 style={{
                   padding: '8px',
-                  backgroundColor: materialType === type ? '#4CAF50' : '#666',
+                  backgroundColor: materialType === option.value ? '#4CAF50' : '#666',
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
@@ -510,7 +541,7 @@ function App() {
                   fontSize: '11px',
                 }}
               >
-                {type}
+                {option.label}
               </button>
             ))}
           </div>
@@ -561,15 +592,15 @@ function App() {
         <div style={{ marginBottom: '20px' }}>
           <button
             onClick={handleSetup}
-            disabled={isLoading || !modelFile || !artworkUrl}
+            disabled={isLoading || !artworkUrl}
             style={{
               width: '100%',
               padding: '12px',
-              backgroundColor: (!modelFile || !artworkUrl) ? '#555' : '#4CAF50',
+              backgroundColor: (!artworkUrl) ? '#555' : '#4CAF50',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: (!modelFile || !artworkUrl) ? 'not-allowed' : 'pointer',
+              cursor: (!artworkUrl) ? 'not-allowed' : 'pointer',
               fontWeight: 'bold',
               fontSize: '14px',
             }}
@@ -676,7 +707,10 @@ function App() {
         </div>
 
         {/* Glass Visibility Control (Acrylic only) */}
-        {materialType === 'ACRYLIC' && (
+        {(() => {
+          const { internalType } = getMaterialTypeInfo(materialType);
+          return internalType === 'ACRYLIC';
+        })() && (
           <div style={{ marginBottom: '20px' }}>
             <h3 style={{ color: '#FFC107', marginTop: 0 }}>Glass Control</h3>
             <button
@@ -720,13 +754,16 @@ function App() {
         >
           <strong>Instructions:</strong>
           <br />
-          1. Upload model (GLB) and artwork texture
+          1. Select material type (model loads automatically)
           <br />
-          2. Select material type
+          2. Upload artwork texture
           <br />
           3. Click "Setup Scene"
           <br />
           4. Use controls to update textures or switch modes
+          <br />
+          <br />
+          <strong>Note:</strong> Models are automatically loaded from assets based on selected material type
         </div>
       </div>
     </div>

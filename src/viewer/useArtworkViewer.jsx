@@ -19,7 +19,7 @@ import {
   useMaterialUpdates,
 } from "../hooks/index.jsx";
 import { useTextureOperations } from "../hooks/useTextureOperations.jsx";
-import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG } from "../config/appConfig.jsx";
+import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG, MODEL_PATHS } from "../config/appConfig.jsx";
 import { TextureManager } from "../managers/TextureManager.jsx";
 import { findArtworkTextureLayer, findTextureLayer, getTextureLayersForMode } from "../utils/textureUtils.jsx";
 import { getArtworkMeshForMode, MODE_TYPES } from "../utils/meshUtils.jsx";
@@ -485,6 +485,19 @@ export function useArtworkViewer({
     const meshVisibilityManager = createMeshVisibilityManager();
     meshVisibilityManagerRef.current = meshVisibilityManager;
 
+    // Preload mirror HDRI in background to avoid loading delay when switching to mirror mode
+    // This significantly improves performance when user selects mirror mode
+    const mirrorHDRIPath = MODEL_PATHS.HDRI_MIRROR;
+    environmentManager.preloadHDRI(
+      mirrorHDRIPath,
+      () => {
+        console.log("Mirror HDRI preloaded successfully");
+      },
+      (error) => {
+        console.warn("Failed to preload mirror HDRI:", error);
+      }
+    );
+
     // Load HDRI
     if (hdriPath) {
       environmentManager.loadHDRI(
@@ -904,19 +917,14 @@ export function useArtworkViewer({
 
             mat.map = clonedTex;
             
-            // Ensure texture is properly configured after creation (apply crisp settings if not already)
+            // Ensure texture is properly configured for artwork (disable mipmaps to prevent white halo)
             if (mat.map) {
-              const texWidth = mat.map.image?.naturalWidth || mat.map.image?.width || 0;
-              const texHeight = mat.map.image?.naturalHeight || mat.map.image?.height || 0;
-              const isPOT = texWidth > 0 && texHeight > 0 && 
-                           TextureManager.isPowerOfTwo(texWidth) && 
-                           TextureManager.isPowerOfTwo(texHeight);
-              
-              // Apply crisp settings for better quality
-              mat.map.generateMipmaps = isPOT;
-              mat.map.minFilter = isPOT ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+              // CRITICAL: Disable mipmaps for artwork textures to prevent white halo around small text
+              // Mipmaps can create light fringes at distance, especially problematic for transparent PNGs
+              mat.map.generateMipmaps = false;
+              mat.map.minFilter = THREE.LinearFilter; // No mipmaps - prevents halo
               mat.map.magFilter = THREE.LinearFilter;
-              mat.map.premultiplyAlpha = true;
+              mat.map.premultiplyAlpha = true; // Test this on/off - may help with edge pixels
               
               // Set anisotropy if renderer is available
               const renderer = sceneManagerRef.current?.getRenderer();
@@ -1030,19 +1038,27 @@ export function useArtworkViewer({
             // Apply proper metal PBR properties to artwork layer based on metal color
             const metalColor = materialType.metalColor;
             const metalFinish = lighting.metalFinish || "brushed";
+            const isMetalBox = activeType === "METAL_BOX";
             
-            if (metalColor === "brushed_silver") {
-              // Apply full metal PBR for silver artwork layer - complete blending with metal
+            // Apply metal PBR for artwork layer (both silver and white metal)
+            if (metalColor === "brushed_silver" || isMetalBox) {
+              // Apply full metal PBR for artwork layer - complete blending with metal
               mat.metalness = 1.0; // Full metalness for complete metallic blending
               
-              // Set roughness based on metal finish - match metal layer appearance
+              // Set roughness based on metal finish and material type
               if (metalFinish === "polished") {
                 mat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
                 mat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
               } else {
-                // brushed finish - match metal layer's fully matte appearance
-                mat.roughness = 3.0; // Maximum roughness - fully matte like metal layer
-                mat.envMapIntensity = 0.05; // Very minimal reflections for brushed finish
+                // brushed finish - extremely low shininess very matte brushed metal
+                mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
+                mat.envMapIntensity = 0.0; // No reflections on metal
+              }
+              
+              // Apply anisotropy for brushed metal directional highlight (same as metal layer)
+              if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
+                if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
+                if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
               }
               
               // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
@@ -1119,9 +1135,11 @@ export function useArtworkViewer({
             }
 
               // Apply transparency settings for alpha areas to show metal background
+              // Use alphaToCoverage to reduce white halo around text edges
               mat.transparent = true;
               mat.opacity = 1.0;
-              mat.alphaTest = 0.001; // Very small alpha test to help with transparency
+              mat.alphaTest = 0.08; // Higher threshold to remove white fringe pixels (0.05-0.15 range)
+              mat.alphaToCoverage = true; // Important: reduces fringes while keeping edges smooth (needs MSAA)
               mat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
               mat.depthTest = true; // Enable depth testing for proper layering
               // Don't set side property - let material use its original setting
@@ -1698,25 +1716,31 @@ export function useArtworkViewer({
               // For acrylics, add a super‑white emissive base under the artwork surfaces
               addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
 
-              // Update materials with environment map
+              // Defer material updates with environment map to allow initial render
+              // This significantly speeds up setup, especially for mirror mode
               const envMap = environmentManagerRef.current?.getEnvironmentMap();
-              if (activeMaterialType === "ACRYLIC") {
-                // For acrylics: apply matte to artwork, glossy to glass
-                if (materialModule.applyArtworkMatteGlassGlossy && envMap) {
-                  materialModule.applyArtworkMatteGlassGlossy(
-                    loadedModel,
-                    envMap,
-                    lighting.reflectionIntensity
-                  );
-                }
-              } else if (envMap && materialModule.updateMaterials) {
-                materialModule.updateMaterials(
-                  loadedModel,
-                  envMap,
-                  lighting.showReflections,
-                  lighting.reflectionIntensity,
-                  materialProcessorRef.current.getBaseEnvMapIntensities()
-                );
+              if (envMap) {
+                // Use setTimeout to defer material updates, allowing scene to render first
+                setTimeout(() => {
+                  if (activeMaterialType === "ACRYLIC") {
+                    // For acrylics: apply matte to artwork, glossy to glass
+                    if (materialModule.applyArtworkMatteGlassGlossy) {
+                      materialModule.applyArtworkMatteGlassGlossy(
+                        loadedModel,
+                        envMap,
+                        lighting.reflectionIntensity
+                      );
+                    }
+                  } else if (materialModule.updateMaterials) {
+                    materialModule.updateMaterials(
+                      loadedModel,
+                      envMap,
+                      lighting.showReflections,
+                      lighting.reflectionIntensity,
+                      materialProcessorRef.current.getBaseEnvMapIntensities()
+                    );
+                  }
+                }, 0);
               }
 
               resolve();
@@ -1736,16 +1760,20 @@ export function useArtworkViewer({
       }
 
       // Load/update HDRI if custom path provided
+      // Note: HDRI loading happens in parallel with texture loading for better performance
       if (customHdriPath && environmentManagerRef.current) {
-        await new Promise((resolve, reject) => {
-          environmentManagerRef.current.loadHDRI(
-            customHdriPath,
-            (newEnvMap) => {
-              const model = modelManagerRef.current?.getModel();
-              if (model && materialType.materialModuleRef.current) {
-                const activeType = materialType.activeMaterialTypeRef.current;
-                const materialModule = materialType.materialModuleRef.current;
+        // Don't await HDRI loading - let it happen in parallel with texture application
+        // This allows the scene to render faster
+        environmentManagerRef.current.loadHDRI(
+          customHdriPath,
+          (newEnvMap) => {
+            const model = modelManagerRef.current?.getModel();
+            if (model && materialType.materialModuleRef.current) {
+              const activeType = materialType.activeMaterialTypeRef.current;
+              const materialModule = materialType.materialModuleRef.current;
 
+              // Defer material updates to allow initial render
+              setTimeout(() => {
                 // For acrylics: apply matte to artwork, glossy to glass
                 if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy) {
                   materialModule.applyArtworkMatteGlassGlossy(
@@ -1767,15 +1795,17 @@ export function useArtworkViewer({
                     materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
                   );
                 }
-              }
-              resolve();
-            },
-            reject
-          );
-        });
+              }, 0);
+            }
+          },
+          (error) => {
+            console.warn('HDRI loading failed:', error);
+          }
+        );
       }
 
-      // 3. Apply artwork texture to both fullBleed and shrunk modes
+      // 3. Apply artwork texture - optimize by only applying to active mode initially
+      // This significantly speeds up initial setup, especially for mirror mode
       if (artworkTexture) {
         const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const fullBleedLayer = allLayers.find(l => l.meshType === MODE_TYPES.FULL_BLEED);
@@ -1785,15 +1815,33 @@ export function useArtworkViewer({
           throw new Error("No artwork layers found. Make sure model is loaded.");
         }
 
-        // Apply to both modes simultaneously
-        const promises = [];
-        if (fullBleedLayer) {
-          promises.push(updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED));
+        // Determine which mode to apply first (use initialMode or default to fullBleed)
+        const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
+        const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
+        
+        // Apply to priority mode first (the one that will be visible)
+        if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
+          await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
+        } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
+          await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
         }
-        if (shrunkLayer) {
-          promises.push(updateArtwork(artworkTexture, MODE_TYPES.SHRUNK));
+        
+        // Defer applying to the other mode to avoid blocking
+        // This allows the scene to render faster while the other texture loads in the background
+        if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
+          // Use setTimeout to defer, allowing browser to render first frame
+          setTimeout(() => {
+            updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
+              console.warn('Failed to apply texture to deferred mode:', err);
+            });
+          }, 100);
+        } else if (otherMode === MODE_TYPES.SHRUNK && shrunkLayer) {
+          setTimeout(() => {
+            updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
+              console.warn('Failed to apply texture to deferred mode:', err);
+            });
+          }, 100);
         }
-        await Promise.all(promises);
       }
 
       // 4. Apply frame texture if provided

@@ -6,13 +6,7 @@
 // =========================
 // APP MODE CONFIGURATION
 // =========================
-export const APP_MODE = {
-  API_TEST: 'api_test',      // New API test mode with control panel
-  DEMO: 'demo',              // Previous demo mode (GlbTextureSwapTester)
-};
-
-// Switch between modes here
-export const CURRENT_APP_MODE = APP_MODE.API_TEST; // Change to APP_MODE.DEMO for previous mode
+// Note: Demo mode has been removed. Only API test mode is available.
 
 // =========================
 // MODEL & ASSET PATHS
@@ -35,6 +29,91 @@ export const MODEL_PATHS = {
  */
 export const getHDRIPath = (materialType) => {
   return materialType === "MIRROR" ? MODEL_PATHS.HDRI_MIRROR : MODEL_PATHS.HDRI;
+};
+
+/**
+ * Material type mapping for API mode
+ * Maps display types to internal types and metal finish
+ */
+export const MATERIAL_TYPE_MAP = {
+  ACRYLIC: { internalType: "ACRYLIC", metalFinish: null },
+  METAL_SILVER: { internalType: "METAL", metalFinish: "brushed_silver" },
+  METAL_WHITE: { internalType: "METAL", metalFinish: "white" },
+  METAL_BOX_SILVER: { internalType: "METAL_BOX", metalFinish: "brushed_silver" },
+  METAL_BOX_WHITE: { internalType: "METAL_BOX", metalFinish: "white" },
+  WOOD: { internalType: "WOOD", metalFinish: null },
+  MIRROR: { internalType: "MIRROR", metalFinish: null },
+};
+
+/**
+ * Get model path based on material type
+ * @param {string} materialType - Material type (can be display type like METAL_SILVER or internal type like METAL)
+ * @param {string} metalFinish - Optional metal finish (brushed_silver or white) - defaults to brushed_silver
+ * @returns {string} Model path
+ */
+export const getModelPath = (materialType, metalFinish = "brushed_silver") => {
+  // Check if it's a display type (has mapping)
+  const materialMapping = MATERIAL_TYPE_MAP[materialType];
+  
+  let internalType = materialType;
+  let finish = metalFinish;
+  
+  if (materialMapping) {
+    internalType = materialMapping.internalType;
+    finish = materialMapping.metalFinish || metalFinish;
+  }
+  
+  const modelPaths = {
+    ACRYLIC: "/assets/models/Acrylic/Acrylic_450x675.glb",
+    METAL: finish === "white" 
+      ? "/assets/models/Metal White/Metal_White_450x675.glb"
+      : "/assets/models/Metal Silver/Metal_Silver_450x675.glb",
+    METAL_BOX: finish === "white"
+      ? "/assets/models/Metal White Box/Metal_Box_White_450x675.glb"
+      : "/assets/models/Metal Silver Box/Metal_Box_Silver_450x675.glb",
+    WOOD: "/assets/models/Wood/Wood_Print.glb",
+    MIRROR: "/assets/models/Mirror/Mirror_450x675.glb",
+  };
+  
+  return modelPaths[internalType] || modelPaths.ACRYLIC;
+};
+
+/**
+ * Get internal material type and metal finish from display type
+ * @param {string} displayType - Display material type (e.g., METAL_SILVER, METAL_WHITE)
+ * @returns {object} { internalType, metalFinish }
+ */
+export const getMaterialTypeInfo = (displayType) => {
+  const mapping = MATERIAL_TYPE_MAP[displayType];
+  if (mapping) {
+    return {
+      internalType: mapping.internalType,
+      metalFinish: mapping.metalFinish,
+    };
+  }
+  // Fallback for internal types
+  return {
+    internalType: displayType,
+    metalFinish: null,
+  };
+};
+
+/**
+ * Get display name for material type
+ * @param {string} displayType - Display material type
+ * @returns {string} Display name
+ */
+export const getMaterialTypeDisplayName = (displayType) => {
+  const displayNames = {
+    ACRYLIC: 'Acrylic',
+    METAL_SILVER: 'Metal - Silver',
+    METAL_WHITE: 'Metal - White',
+    METAL_BOX_SILVER: 'Metal Box - Silver',
+    METAL_BOX_WHITE: 'Metal Box - White',
+    WOOD: 'Wood',
+    MIRROR: 'Mirror',
+  };
+  return displayNames[displayType] || displayType;
 };
 
 // =========================
@@ -77,6 +156,20 @@ export const DEFAULT_STATE = {
   showLightingControls: false,
   showMeshControls: false,
   showTextureLayers: false,
+};
+
+/**
+ * Get default reflection intensity based on material type
+ * @param {string} materialType - Material type (ACRYLIC, MIRROR, etc.)
+ * @returns {number} Default reflection intensity
+ */
+export const getDefaultReflectionIntensity = (materialType) => {
+  // Acrylic and Mirror use 0.50 by default
+  if (materialType === "ACRYLIC" || materialType === "MIRROR") {
+    return 0.50;
+  }
+  // All other materials use the standard default
+  return DEFAULT_STATE.reflectionIntensity;
 };
 
 // =========================
@@ -154,7 +247,7 @@ export const UI_CONFIG = {
     },
   },
   background: {
-    gradient: "#333333", // Dark grey background for both API and demo modes
+    gradient: "#333333", // Dark grey background
   },
 };
 

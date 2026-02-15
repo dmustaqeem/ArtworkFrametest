@@ -13,6 +13,8 @@ export class EnvironmentManager {
     this.hdrTexture = null;
     this.environmentRotation = 0;
     this.isEnabled = true;
+    this.currentHDRIPath = null; // Track current HDRI path to avoid reloading
+    this.preloadedHDRIs = new Map(); // Cache for preloaded HDRIs (path -> envMap)
 
     this.initialize();
   }
@@ -42,9 +44,130 @@ export class EnvironmentManager {
   }
 
   /**
+   * Preload an HDRI file in the background (useful for mirror HDRI)
+   * This allows the HDRI to be ready when needed, avoiding loading delays
+   * Unlike loadHDRI, this doesn't set it as the active environment map
+   */
+  preloadHDRI(path, onLoad, onError) {
+    // Check if already preloaded
+    let pathKey = null;
+    if (path instanceof File) {
+      pathKey = `file:${path.name}`;
+    } else if (typeof path === 'string') {
+      pathKey = path;
+    }
+    
+    if (pathKey && this.preloadedHDRIs.has(pathKey)) {
+      if (onLoad) onLoad(this.preloadedHDRIs.get(pathKey));
+      return;
+    }
+    
+    // Ensure PMREMGenerator is initialized
+    if (!this.ensurePMREMGeneratorReady()) {
+      if (onError) onError("PMREMGenerator is not initialized. Renderer may not be ready.");
+      return;
+    }
+    
+    const pmremGenerator = this.pmremGenerator;
+    const renderer = this.renderer;
+    
+    if (!renderer || !renderer.getContext) {
+      if (onError) onError("Renderer is not available for HDRI processing");
+      return;
+    }
+    
+    const loader = new RGBELoader().setDataType(THREE.HalfFloatType);
+    let objectUrl = null;
+    let finalPath = path;
+    const capturedPathKey = pathKey;
+    
+    if (path instanceof File) {
+      objectUrl = URL.createObjectURL(path);
+      finalPath = objectUrl;
+    } else if (typeof path === 'string' && path.startsWith('blob:')) {
+      finalPath = path;
+    }
+    
+    // Load and process HDRI without setting it as active environment
+    loader.load(
+      finalPath,
+      (hdrTex) => {
+        if (!hdrTex || !hdrTex.image) {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          if (onError) onError("HDRI file loaded but texture is invalid");
+          return;
+        }
+        
+        const activePMREM = this.pmremGenerator || pmremGenerator;
+        if (!activePMREM) {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          if (onError) onError("PMREMGenerator is not available");
+          hdrTex.dispose();
+          return;
+        }
+        
+        // Process PMREM in background (yield to browser)
+        const processPMREM = () => {
+          try {
+            const newEnvMap = activePMREM.fromEquirectangular(hdrTex).texture;
+            hdrTex.dispose();
+            
+            // Cache the preloaded environment map
+            if (capturedPathKey) {
+              this.preloadedHDRIs.set(capturedPathKey, newEnvMap);
+            }
+            
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            if (onLoad) onLoad(newEnvMap);
+          } catch (err) {
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            if (onError) onError(`Failed to process HDRI: ${err.message}`);
+            hdrTex.dispose();
+          }
+        };
+        
+        // Use requestAnimationFrame to yield to browser
+        requestAnimationFrame(processPMREM);
+      },
+      undefined, // onProgress
+      (error) => {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        const errorMsg = path instanceof File 
+          ? `Failed to load HDRI file: ${path.name}`
+          : `Failed to load HDRI: ${path}`;
+        if (onError) onError(errorMsg);
+      }
+    );
+  }
+
+  /**
    * Load HDRI environment map from path, File object, or blob URL
    */
   loadHDRI(path, onLoad, onError) {
+    // Check if we're already loading/loaded the same HDRI
+    // For File objects, compare by name; for paths, compare by string
+    let pathKey = null;
+    if (path instanceof File) {
+      pathKey = `file:${path.name}`;
+    } else if (typeof path === 'string') {
+      pathKey = path;
+    }
+    
+    // Check preloaded cache first
+    if (pathKey && this.preloadedHDRIs.has(pathKey)) {
+      const preloadedEnvMap = this.preloadedHDRIs.get(pathKey);
+      this.setEnvironmentMap(preloadedEnvMap);
+      this.currentHDRIPath = pathKey;
+      if (onLoad) onLoad(preloadedEnvMap);
+      return;
+    }
+    
+    // If we already have this HDRI loaded, skip reloading
+    if (pathKey && this.currentHDRIPath === pathKey && this.envMap) {
+      if (onLoad) onLoad(this.envMap);
+      return;
+    }
+    
     // Ensure PMREMGenerator is initialized and ready
     if (!this.ensurePMREMGeneratorReady()) {
       const error = "PMREMGenerator is not initialized. Renderer may not be ready.";
@@ -68,6 +191,7 @@ export class EnvironmentManager {
     // Handle File objects directly - convert to object URL
     let objectUrl = null;
     let finalPath = path;
+    const capturedPathKey = pathKey; // Capture pathKey for use in callback
     
     if (path instanceof File) {
       objectUrl = URL.createObjectURL(path);
@@ -117,33 +241,46 @@ export class EnvironmentManager {
           return;
         }
 
-        try {
-          const newEnvMap = activePMREM.fromEquirectangular(hdrTex).texture;
-          
-          // Dispose old textures
-          if (this.hdrTexture) {
-            this.hdrTexture.dispose();
+        // PMREM generation is CPU-intensive - yield to browser before processing
+        // Use requestAnimationFrame to allow browser to render first frame
+        const processPMREM = () => {
+          try {
+            const newEnvMap = activePMREM.fromEquirectangular(hdrTex).texture;
+            
+            // Dispose old textures
+            if (this.hdrTexture) {
+              this.hdrTexture.dispose();
+            }
+            hdrTex.dispose();
+            
+            // Set new environment map
+            this.setEnvironmentMap(newEnvMap);
+            
+            // Track the current HDRI path to avoid reloading
+            if (capturedPathKey) {
+              this.currentHDRIPath = capturedPathKey;
+            }
+            
+            // Revoke object URL after loading if we created one
+            if (objectUrl) {
+              URL.revokeObjectURL(objectUrl);
+            }
+            
+            if (onLoad) onLoad(newEnvMap);
+          } catch (err) {
+            // Revoke object URL on error
+            if (objectUrl) {
+              URL.revokeObjectURL(objectUrl);
+            }
+            const error = `Failed to process HDRI: ${err.message}`;
+            if (onError) onError(error);
+            hdrTex.dispose();
           }
-          hdrTex.dispose();
-          
-          // Set new environment map
-          this.setEnvironmentMap(newEnvMap);
-          
-          // Revoke object URL after loading if we created one
-          if (objectUrl) {
-            URL.revokeObjectURL(objectUrl);
-          }
-          
-          if (onLoad) onLoad(newEnvMap);
-        } catch (err) {
-          // Revoke object URL on error
-          if (objectUrl) {
-            URL.revokeObjectURL(objectUrl);
-          }
-          const error = `Failed to process HDRI: ${err.message}`;
-          if (onError) onError(error);
-          hdrTex.dispose();
-        }
+        };
+        
+        // Use requestAnimationFrame to yield to browser before PMREM generation
+        // This prevents blocking the main thread during setup and allows first render
+        requestAnimationFrame(processPMREM);
       },
       undefined, // onProgress
       (error) => {

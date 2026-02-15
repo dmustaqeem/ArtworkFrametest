@@ -71,6 +71,12 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     if (mat.metalnessMap) phys.metalnessMap = mat.metalnessMap;
     phys.color.copy(mat.color || new THREE.Color(0xffffff));
     phys.name = mat.name;
+    // Preserve sheen properties if they exist on the original material
+    if (mat.sheen !== undefined) phys.sheen = mat.sheen;
+    if (mat.sheenRoughness !== undefined) phys.sheenRoughness = mat.sheenRoughness;
+    if (mat.sheenColor !== undefined) phys.sheenColor.copy(mat.sheenColor);
+    if (mat.sheenColorMap) phys.sheenColorMap = mat.sheenColorMap;
+    if (mat.sheenRoughnessMap) phys.sheenRoughnessMap = mat.sheenRoughnessMap;
     mat = phys;
   }
   
@@ -103,6 +109,15 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   }
   if (preset.specularIntensity !== undefined && mat.specularIntensity !== undefined) {
     mat.specularIntensity = preset.specularIntensity;
+  }
+  if (preset.sheen !== undefined && mat.sheen !== undefined) {
+    mat.sheen = preset.sheen;
+  }
+  if (preset.sheenRoughness !== undefined && mat.sheenRoughness !== undefined) {
+    mat.sheenRoughness = preset.sheenRoughness;
+  }
+  if (preset.sheenColor !== undefined && mat.sheenColor !== undefined) {
+    mat.sheenColor.copy(preset.sheenColor);
   }
   
   // Handle texture maps based on role

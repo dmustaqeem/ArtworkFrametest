@@ -4,7 +4,7 @@ import * as THREE from "three";
  * LightingManager
  * Centralized lighting management system for 3D scene
  * Parent object that handles all lighting operations
- * Can be accessed by GlbTextureSwapTester and material modules
+ * Can be accessed by material modules
  */
 export class LightingManager {
   constructor(scene, renderer) {
