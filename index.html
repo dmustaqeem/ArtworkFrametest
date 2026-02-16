@@ -5,13 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Three.js Art Frame Test - React</title>
     
-    <!-- Preconnect to improve network performance -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+    <!-- DNS prefetch and preconnect for faster asset loading -->
+    <!-- Preconnect to same origin for assets (reduces connection overhead) -->
+    <link rel="dns-prefetch" href="/" />
+    <link rel="preconnect" href="/" crossorigin />
     
     <!-- Preload critical assets for faster initial load -->
     <!-- DRACO decoder files are loaded first to avoid blocking model loading -->
     <link rel="preload" href="/assets/draco/gltf/draco_decoder.js" as="script" crossorigin />
     <link rel="preload" href="/assets/draco/gltf/draco_decoder.wasm" as="fetch" crossorigin />
+    
+    <!-- Prefetch likely-to-be-used assets (non-blocking, low priority) -->
+    <!-- These start downloading in background while page loads -->
+    <link rel="prefetch" href="/assets/hdr/studio1.hdr" as="fetch" crossorigin />
+    <link rel="prefetch" href="/assets/hdr/studio2.hdr" as="fetch" crossorigin />
   </head>
   <body>
     <div id="root"></div>
