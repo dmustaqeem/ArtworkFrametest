@@ -117,9 +117,7 @@ export default function LightingControls({
                 const camera = sceneManagerRef.current?.getCamera
                   ? sceneManagerRef.current.getCamera()
                   : null;
-                if (renderer && camera) {
-                  renderer.render(scene, camera);
-                }
+                // Animation loop handles rendering automatically - no need for manual render
               }
             }}
             style={{ width: "100%" }}

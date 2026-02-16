@@ -249,19 +249,6 @@ export const applyMirrorState = (
       // ✅ Single-source role detection
       const role = getMirrorRole(obj, mat);
 
-      // Debug: Log role classification for mirror meshes
-      const objName = (obj.name || "").toLowerCase();
-      if (objName.includes("mirror_")) {
-        console.log("[MIRROR ROLE]", obj.name, "=>", role, {
-          metalness: mat.metalness,
-          roughness: mat.roughness,
-          envMapIntensity: mat.envMapIntensity,
-          hasMap: !!mat.map,
-          hasEnvMap: !!mat.envMap,
-          envMapProvided: !!envMap,
-        });
-      }
-
       // ✅ Single-source preset selection
       const preset =
         role === "PRINT" ? MIRROR_PRESET.PRINT :
@@ -279,14 +266,9 @@ export const applyMirrorState = (
       // CRITICAL: Set envMap AFTER preset application to ensure it's not cleared
       if (envMap) {
         finalMat.envMap = envMap;
-        console.log(`[MIRROR ENVMAP] Set envMap on ${obj.name}`, { 
-          hasEnvMap: !!finalMat.envMap,
-          envMapType: finalMat.envMap?.constructor?.name 
-        });
       } else {
         // Fallback: rely on scene.environment (set by EnvironmentManager)
         finalMat.envMap = null; // Will use scene.environment
-        console.log(`[MIRROR ENVMAP] No envMap provided for ${obj.name}, using scene.environment`);
       }
       
       // Update the material reference if it was upgraded
@@ -323,16 +305,6 @@ export const applyMirrorState = (
       }
 
       finalMat.needsUpdate = true;
-      
-      // Final check: verify envMap is still set
-      if (role === "MIRROR" && objName.includes("mirror_")) {
-        console.log(`[MIRROR ENVMAP FINAL] ${obj.name}`, {
-          hasEnvMap: !!finalMat.envMap,
-          envMapIntensity: finalMat.envMapIntensity,
-          metalness: finalMat.metalness,
-          roughness: finalMat.roughness,
-        });
-      }
     });
   });
 };

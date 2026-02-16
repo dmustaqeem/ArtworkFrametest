@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import * as THREE from "three";
 import { MATERIAL_CONFIG, MODEL_PATHS, TEXTURE_CONFIG } from "../config/appConfig.jsx";
 import { TextureManager } from "../managers/TextureManager.jsx";
+import { isMetalLocked } from "../materials/MetalMaterial.jsx";
 
 /**
  * TextureLayerManager Component
@@ -62,6 +63,7 @@ export default function TextureLayerManager({
   collapsible = true,
   materialType = null,
   textureManager = null,
+  meshCache = null, // Optional MeshCache for optimized lookups
   style = {}
 }) {
   const [textureLayers, setTextureLayers] = useState(externalTextureLayers || []);
@@ -165,7 +167,9 @@ export default function TextureLayerManager({
         undefined,
         (error) => {
           // Failed to load texture
-          console.error(`✗ Failed to load texture ${index + 1}: ${path}`, error);
+          if (process.env.NODE_ENV === 'development') {
+            console.error(`✗ Failed to load texture ${index + 1}: ${path}`, error);
+          }
           testTexturesRef.current[index] = null;
           loadedCount++;
         }
@@ -189,9 +193,11 @@ export default function TextureLayerManager({
     const canvas = document.createElement('canvas');
     canvas.width = image.width || image.naturalWidth;
     canvas.height = image.height || image.naturalHeight;
+    // Optimize: Use willReadFrequently only when needed, enable desynchronized for better performance
     const ctx = canvas.getContext('2d', { 
-      willReadFrequently: true,
-      alpha: true 
+      willReadFrequently: true, // Needed for getImageData
+      alpha: true,
+      desynchronized: true // Allow async rendering
     });
     
     // Enable image smoothing for better quality
@@ -229,44 +235,108 @@ export default function TextureLayerManager({
       }
     }
     
-    // Process each pixel
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      
-      let shouldRemove = false;
-      
-      if (targetColor) {
-        // Remove specific color (with tolerance) - same clean logic as metals
-        const rDiff = Math.abs(r - targetColor.r);
-        const gDiff = Math.abs(g - targetColor.g);
-        const bDiff = Math.abs(b - targetColor.b);
+    // Optimize: Use chunked processing for large images to avoid blocking
+    const pixelCount = canvas.width * canvas.height;
+    const LARGE_IMAGE_THRESHOLD = 1000000; // 1MP (1000x1000)
+    const CHUNK_SIZE = 50000; // Process 50k pixels per chunk
+    
+    if (pixelCount > LARGE_IMAGE_THRESHOLD) {
+      // Large image: Use chunked async processing
+      return new Promise((resolve) => {
+        let pixelIndex = 0;
+        const totalPixels = pixelCount;
         
-        // Check if pixel color matches target color within tolerance
-        // Use strict individual channel matching for cleaner white removal (same as metals)
-        if (rDiff <= colorTolerance && gDiff <= colorTolerance && bDiff <= colorTolerance) {
-          shouldRemove = true;
+        const processChunk = (deadline) => {
+          const endIndex = Math.min(pixelIndex + CHUNK_SIZE, totalPixels);
+          
+          for (let p = pixelIndex; p < endIndex; p++) {
+            const i = p * 4;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            
+            let shouldRemove = false;
+            
+            if (targetColor) {
+              const rDiff = Math.abs(r - targetColor.r);
+              const gDiff = Math.abs(g - targetColor.g);
+              const bDiff = Math.abs(b - targetColor.b);
+              
+              if (rDiff <= colorTolerance && gDiff <= colorTolerance && bDiff <= colorTolerance) {
+                shouldRemove = true;
+              }
+            } else {
+              const brightness = (r + g + b) / (3 * 255);
+              if (brightness >= threshold) {
+                shouldRemove = true;
+              }
+            }
+            
+            if (shouldRemove) {
+              data[i + 3] = 0;
+            }
+          }
+          
+          pixelIndex = endIndex;
+          
+          if (pixelIndex < totalPixels) {
+            // Continue processing if we have time, otherwise yield
+            if (deadline && deadline.timeRemaining() > 0) {
+              processChunk(deadline);
+            } else {
+              // Yield to browser, continue in next idle period
+              if (typeof requestIdleCallback !== 'undefined') {
+                requestIdleCallback(processChunk, { timeout: 100 });
+              } else {
+                setTimeout(() => processChunk({ timeRemaining: () => 5 }), 0);
+              }
+            }
+          } else {
+            // Finished processing all pixels
+            ctx.putImageData(imageData, 0, 0);
+            resolve(canvas);
+          }
+        };
+        
+        // Start processing
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(processChunk, { timeout: 2000 });
+        } else {
+          setTimeout(() => processChunk({ timeRemaining: () => Infinity }), 0);
         }
-      } else {
-        // Default: Remove white/bright pixels (brightness threshold)
-        const brightness = (r + g + b) / (3 * 255);
-        if (brightness >= threshold) {
-          shouldRemove = true;
+      });
+    } else {
+      // Small image: Process synchronously (fast enough)
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        
+        let shouldRemove = false;
+        
+        if (targetColor) {
+          const rDiff = Math.abs(r - targetColor.r);
+          const gDiff = Math.abs(g - targetColor.g);
+          const bDiff = Math.abs(b - targetColor.b);
+          
+          if (rDiff <= colorTolerance && gDiff <= colorTolerance && bDiff <= colorTolerance) {
+            shouldRemove = true;
+          }
+        } else {
+          const brightness = (r + g + b) / (3 * 255);
+          if (brightness >= threshold) {
+            shouldRemove = true;
+          }
+        }
+        
+        if (shouldRemove) {
+          data[i + 3] = 0;
         }
       }
       
-      // If pixel should be removed, make it TRANSPARENT
-      if (shouldRemove) {
-        data[i + 3] = 0; // Set alpha to 0 (fully transparent)
-      }
-      // Otherwise, keep the pixel as is (preserve original alpha)
+      ctx.putImageData(imageData, 0, 0);
+      return canvas;
     }
-    
-    // Put processed data back
-    ctx.putImageData(imageData, 0, 0);
-    
-    return canvas;
   };
 
   /**
@@ -280,7 +350,7 @@ export default function TextureLayerManager({
    */
   const createWhiteEmissiveMaskCanvas = (sourceCanvas, whiteThreshold = 0.92, saturationMax = 0.18) => {
     if (!sourceCanvas || !sourceCanvas.width || !sourceCanvas.height) {
-      return null;
+      return Promise.resolve(null);
     }
 
     const w = sourceCanvas.width;
@@ -290,11 +360,18 @@ export default function TextureLayerManager({
     mask.width = w;
     mask.height = h;
 
-    const ctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
-    const mctx = mask.getContext("2d", { willReadFrequently: true });
+    // Optimize: Use willReadFrequently only when needed, enable desynchronized for better performance
+    const ctx = sourceCanvas.getContext("2d", { 
+      willReadFrequently: true, // Needed for getImageData
+      desynchronized: true 
+    });
+    const mctx = mask.getContext("2d", { 
+      willReadFrequently: true, // Needed for createImageData
+      desynchronized: true 
+    });
 
     if (!ctx || !mctx) {
-      return null;
+      return Promise.resolve(null);
     }
 
     const imgData = ctx.getImageData(0, 0, w, h);
@@ -303,35 +380,107 @@ export default function TextureLayerManager({
     const out = mctx.createImageData(w, h);
     const o = out.data;
 
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i] / 255;
-      const g = data[i + 1] / 255;
-      const b = data[i + 2] / 255;
-      const a = data[i + 3] / 255;
+    // Optimize: Use chunked processing for large images to avoid blocking
+    const pixelCount = w * h;
+    const LARGE_IMAGE_THRESHOLD = 1000000; // 1MP (1000x1000)
+    const CHUNK_SIZE = 50000; // Process 50k pixels per chunk
+    
+    if (pixelCount > LARGE_IMAGE_THRESHOLD) {
+      // Large image: Use chunked async processing
+      return new Promise((resolve) => {
+        let pixelIndex = 0;
+        
+        const processChunk = (deadline) => {
+          const endIndex = Math.min(pixelIndex + CHUNK_SIZE, pixelCount);
+          
+          for (let p = pixelIndex; p < endIndex; p++) {
+            const i = p * 4;
+            const r = data[i] / 255;
+            const g = data[i + 1] / 255;
+            const b = data[i + 2] / 255;
+            const a = data[i + 3] / 255;
 
-      // Luminance in linear-ish space
-      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            // Luminance in linear-ish space
+            const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-      // Simple saturation approximation
-      const maxv = Math.max(r, g, b);
-      const minv = Math.min(r, g, b);
-      const sat = maxv === 0 ? 0 : (maxv - minv) / maxv;
+            // Simple saturation approximation
+            const maxv = Math.max(r, g, b);
+            const minv = Math.min(r, g, b);
+            const sat = maxv === 0 ? 0 : (maxv - minv) / maxv;
 
-      // Only treat pixels as “paper white” if:
-      // - Visible (alpha not ~0)
-      // - Bright enough
-      // - Low saturation (i.e. neutral, not colored)
-      const isWhite = a > 0.001 && lum >= whiteThreshold && sat <= saturationMax;
+            // Only treat pixels as "paper white" if:
+            // - Visible (alpha not ~0)
+            // - Bright enough
+            // - Low saturation (i.e. neutral, not colored)
+            const isWhite = a > 0.001 && lum >= whiteThreshold && sat <= saturationMax;
 
-      const v = isWhite ? 255 : 0;
-      o[i] = v;       // R
-      o[i + 1] = v;   // G
-      o[i + 2] = v;   // B
-      o[i + 3] = 255; // A (opaque mask)
+            const v = isWhite ? 255 : 0;
+            o[i] = v;       // R
+            o[i + 1] = v;   // G
+            o[i + 2] = v;   // B
+            o[i + 3] = 255; // A (opaque mask)
+          }
+          
+          pixelIndex = endIndex;
+          
+          if (pixelIndex < pixelCount) {
+            // Continue processing if we have time, otherwise yield
+            if (deadline && deadline.timeRemaining() > 0) {
+              processChunk(deadline);
+            } else {
+              // Yield to browser, continue in next idle period
+              if (typeof requestIdleCallback !== 'undefined') {
+                requestIdleCallback(processChunk, { timeout: 100 });
+              } else {
+                setTimeout(() => processChunk({ timeRemaining: () => 5 }), 0);
+              }
+            }
+          } else {
+            // Finished processing all pixels
+            mctx.putImageData(out, 0, 0);
+            resolve(mask);
+          }
+        };
+        
+        // Start processing
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(processChunk, { timeout: 2000 });
+        } else {
+          setTimeout(() => processChunk({ timeRemaining: () => Infinity }), 0);
+        }
+      });
+    } else {
+      // Small image: Process synchronously (fast enough)
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i] / 255;
+        const g = data[i + 1] / 255;
+        const b = data[i + 2] / 255;
+        const a = data[i + 3] / 255;
+
+        // Luminance in linear-ish space
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        // Simple saturation approximation
+        const maxv = Math.max(r, g, b);
+        const minv = Math.min(r, g, b);
+        const sat = maxv === 0 ? 0 : (maxv - minv) / maxv;
+
+        // Only treat pixels as "paper white" if:
+        // - Visible (alpha not ~0)
+        // - Bright enough
+        // - Low saturation (i.e. neutral, not colored)
+        const isWhite = a > 0.001 && lum >= whiteThreshold && sat <= saturationMax;
+
+        const v = isWhite ? 255 : 0;
+        o[i] = v;       // R
+        o[i + 1] = v;   // G
+        o[i + 2] = v;   // B
+        o[i + 3] = 255; // A (opaque mask)
+      }
+
+      mctx.putImageData(out, 0, 0);
+      return Promise.resolve(mask);
     }
-
-    mctx.putImageData(out, 0, 0);
-    return mask;
   };
 
   // Apply test texture to a specific layer
@@ -383,7 +532,9 @@ export default function TextureLayerManager({
           undefined,
           (error) => {
             // Failed to reload texture
-            console.error(`✗ Failed to reload texture: ${path}`, error);
+            if (process.env.NODE_ENV === 'development') {
+              console.error(`✗ Failed to reload texture: ${path}`, error);
+            }
           }
         );
       }
@@ -399,7 +550,9 @@ export default function TextureLayerManager({
       };
       sourceImage.onerror = (error) => {
         // Failed to load image
-        console.error(`✗ Image failed to load: ${sourceImage.src || 'unknown'}`, error);
+        if (process.env.NODE_ENV === 'development') {
+          console.error(`✗ Image failed to load: ${sourceImage.src || 'unknown'}`, error);
+        }
       };
       return;
     }
@@ -435,26 +588,16 @@ export default function TextureLayerManager({
     
     if (isMetal) {
       // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
-      if (isFrame) {
-        console.log('Applying texture to frame mesh:', layer.meshName);
-      } else if (isFullBleed || isShrunk) {
-        console.log('Applying texture to artwork mesh (metal):', layer.meshName, 'Mesh type:', layer.meshType);
-      } else {
+      if (!isFrame && !isFullBleed && !isShrunk) {
         // Skip other mesh types for metals
-        console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for metals. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
         return;
       }
     }
     
     if (isMirror) {
       // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
-      if (isFrame) {
-        console.log('Applying texture to frame mesh:', layer.meshName);
-      } else if (isFullBleed || isShrunk) {
-        console.log('Applying texture to artwork mesh (mirror):', layer.meshName, 'Mesh type:', layer.meshType);
-      } else {
+      if (!isFrame && !isFullBleed && !isShrunk) {
         // Skip other mesh types for mirrors
-        console.log(`Skipping texture application - only Artwork_FullBleed, Artwork_Shrunk, and frames allowed for mirrors. Mesh type: ${layer.meshType}, Mesh name: ${layer.meshName}`);
         return;
       }
     }
@@ -473,8 +616,13 @@ export default function TextureLayerManager({
     
     if (isAcrylic && (isFullBleed || isShrunk)) {
       // Create a composite texture with white base and artwork on top
+      // Optimized: Use willReadFrequently: false for better performance
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      const ctx = canvas.getContext('2d', { 
+        willReadFrequently: false, // Optimize for write operations
+        alpha: true,
+        desynchronized: true // Allow async rendering
+      });
       
       // Get exact image dimensions to avoid any scaling
       const img = sourceImage;
@@ -484,7 +632,9 @@ export default function TextureLayerManager({
         // For images, use naturalWidth/naturalHeight for actual pixel dimensions
         // CRITICAL: Wait for image to be fully loaded to get accurate dimensions
         if (!img.complete || img.naturalWidth === 0) {
-          console.warn('Image not fully loaded, using source image directly');
+          if (process.env.NODE_ENV === 'development') {
+            console.warn('Image not fully loaded, using source image directly');
+          }
           processedImage = sourceImage;
         } else {
           width = img.naturalWidth;
@@ -502,7 +652,9 @@ export default function TextureLayerManager({
       
       // Ensure we have valid dimensions
       if (!width || !height || width <= 0 || height <= 0) {
-        console.warn('Invalid image dimensions for acrylic composite, using source image directly');
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('Invalid image dimensions for acrylic composite, using source image directly');
+        }
         processedImage = sourceImage;
       } else {
         // Set canvas to exact image dimensions (no scaling)
@@ -510,9 +662,8 @@ export default function TextureLayerManager({
         canvas.width = width;
         canvas.height = height;
         
-        // Log composite size for debugging (helps identify NPOT issues)
+        // Check if texture is power-of-two (helps identify NPOT issues)
         const isPOT = TextureManager.isPowerOfTwo(width) && TextureManager.isPowerOfTwo(height);
-        console.log(`[AcrylicComposite] Canvas size: ${width}x${height}, POT: ${isPOT}`);
         
         // CRITICAL: Disable image smoothing for crisp, pixel-perfect rendering
         ctx.imageSmoothingEnabled = false;
@@ -546,44 +697,51 @@ export default function TextureLayerManager({
     }
 
     // For acrylic artwork layers, build an emissive mask that only boosts
-    // near-white “paper” regions instead of the whole artwork.
+    // near-white "paper" regions instead of the whole artwork.
     if (isAcrylic && (isFullBleed || isShrunk) && processedImage) {
-      const maskCanvas = processedImage instanceof HTMLCanvasElement
-        ? createWhiteEmissiveMaskCanvas(processedImage, 0.92, 0.18)
-        : null;
+      if (processedImage instanceof HTMLCanvasElement) {
+        const maskCanvasResult = createWhiteEmissiveMaskCanvas(processedImage, 0.92, 0.18);
+        
+        // Handle async result (always returns Promise now for consistency)
+        const handleMaskCanvas = (maskCanvas) => {
+          if (maskCanvas && (finalMat.isMeshStandardMaterial || finalMat.isMeshPhysicalMaterial)) {
+            let emissiveTex;
+            try {
+              if (textureManager && textureManager.createTextureFromImage) {
+                emissiveTex = textureManager.createTextureFromImage(maskCanvas, {
+                  flipY: false,
+                });
+              } else {
+                emissiveTex = new THREE.Texture(maskCanvas);
+                emissiveTex.wrapS = THREE.ClampToEdgeWrapping;
+                emissiveTex.wrapT = THREE.ClampToEdgeWrapping;
+                emissiveTex.generateMipmaps = false;
+                emissiveTex.minFilter = THREE.LinearFilter;
+                emissiveTex.magFilter = THREE.LinearFilter;
+                emissiveTex.flipY = false;
+                emissiveTex.needsUpdate = true;
+              }
 
-      if (maskCanvas && (finalMat.isMeshStandardMaterial || finalMat.isMeshPhysicalMaterial)) {
-        let emissiveTex;
-        try {
-          if (textureManager && textureManager.createTextureFromImage) {
-            emissiveTex = textureManager.createTextureFromImage(maskCanvas, {
-              flipY: false,
-            });
-          } else {
-            emissiveTex = new THREE.Texture(maskCanvas);
-            emissiveTex.wrapS = THREE.ClampToEdgeWrapping;
-            emissiveTex.wrapT = THREE.ClampToEdgeWrapping;
-            emissiveTex.generateMipmaps = false;
-            emissiveTex.minFilter = THREE.LinearFilter;
-            emissiveTex.magFilter = THREE.LinearFilter;
-            emissiveTex.flipY = false;
-            emissiveTex.needsUpdate = true;
+              if (emissiveTex) {
+                finalMat.emissive = new THREE.Color(0xffffff);
+                finalMat.emissiveMap = emissiveTex;
+                // Lower intensity for more natural look (prevents flattening and glass glow)
+                // Range 1-5 is more physically safe than 20
+                finalMat.emissiveIntensity = 3.0;
+                // Keep tone mapping so global exposure still behaves correctly
+                finalMat.toneMapped = true;
+                // Ensure emissive map uses SRGB color space
+                emissiveTex.colorSpace = THREE.SRGBColorSpace;
+              }
+            } catch (e) {
+              // If emissive mask creation fails, fall back gracefully with no emissive boost
+            }
           }
+        };
 
-          if (emissiveTex) {
-            finalMat.emissive = new THREE.Color(0xffffff);
-            finalMat.emissiveMap = emissiveTex;
-            // Lower intensity for more natural look (prevents flattening and glass glow)
-            // Range 1-5 is more physically safe than 20
-            finalMat.emissiveIntensity = 3.0;
-            // Keep tone mapping so global exposure still behaves correctly
-            finalMat.toneMapped = true;
-            // Ensure emissive map uses SRGB color space
-            emissiveTex.colorSpace = THREE.SRGBColorSpace;
-          }
-        } catch (e) {
-          // If emissive mask creation fails, fall back gracefully with no emissive boost
-        }
+        maskCanvasResult.then(handleMaskCanvas).catch(() => {
+          // If mask creation fails, continue without emissive boost
+        });
       }
     }
     
@@ -732,108 +890,105 @@ export default function TextureLayerManager({
     
     // For metals: Copy brushed metal finish from corresponding metal background mesh
     if (isMetal && (isFullBleed || isShrunk)) {
-      // Find the corresponding metal background mesh (Metal_Silver_FullBleed/Shrunk or Metal_White_FullBleed/Shrunk)
+      // Use MeshCache for optimized lookups (eliminates model traversal)
       let metalMatForColor = null; // Always from FullBleed for color consistency
       let metalMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
       const meshNameLower = (layer.meshName || "").toLowerCase();
       
-      // First, detect metal type from model meshes (more reliable than materialType)
-      let detectedMetalType = null;
-      model.traverse((obj) => {
-        if (obj.isMesh && obj.name) {
-          const objNameLower = obj.name.toLowerCase();
-          if (objNameLower.includes("silver") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
-            detectedMetalType = "silver";
-          } else if (objNameLower.includes("white") && objNameLower.includes("metal") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
-            detectedMetalType = "white";
-          }
+      // Use cache if available, otherwise fall back to traversal (backward compatible)
+      if (meshCache && !meshCache.isEmpty()) {
+        // Detect metal type from cache
+        const detectedMetalType = meshCache.detectMetalType();
+        const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (materialType === "METAL" || meshNameLower.includes("silver")));
+        const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (materialType === "METAL_BOX" || meshNameLower.includes("white")));
+        
+        const metalType = isSilver ? "silver" : (isWhite ? "white" : null);
+        if (metalType) {
+          metalMatForColor = meshCache.getMetalMaterialForColor(metalType);
+          metalMatForMaps = meshCache.getMetalMaterialForMaps(metalType, isFullBleed);
         }
-      });
-      
-      // Use detected type from model if available, otherwise fall back to materialType
-      const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (materialType === "METAL" || meshNameLower.includes("silver")));
-      const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (materialType === "METAL_BOX" || meshNameLower.includes("white")));
-      
-      console.log(`[Metal PBR] MaterialType: ${materialType}, DetectedMetalType: ${detectedMetalType}, isSilver: ${isSilver}, isWhite: ${isWhite}, meshName: ${layer.meshName}`);
-      
-      model.traverse((obj) => {
-        if (obj.isMesh && obj.material) {
-          const objNameLower = (obj.name || "").toLowerCase();
-          
-          // Always find FullBleed for color (ensures consistency)
-          if (!metalMatForColor) {
-            let shouldMatchFullBleed = false;
-            if (isSilver) {
-              shouldMatchFullBleed = objNameLower.includes("silver") && 
-                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                     !objNameLower.includes("artwork");
-            } else if (isWhite) {
-              // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-              shouldMatchFullBleed = objNameLower.includes("white") && 
-                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                                     !objNameLower.includes("artwork");
-            }
-            
-            if (shouldMatchFullBleed) {
-              console.log(`[Metal PBR] Potential FullBleed match found: ${obj.name}`);
-              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-              mats.forEach((mat, idx) => {
-                console.log(`[Metal PBR] Checking material ${idx} from ${obj.name}: metalness=${mat.metalness}, hasNormalMap=${!!mat.normalMap}`);
-                if (mat.metalness !== undefined && mat.metalness > 0.4) {
-                  metalMatForColor = mat;
-                  console.log(`[Metal PBR] ✓ Found FullBleed material for color: ${obj.name}, metalness: ${mat.metalness}`);
-                }
-              });
+      } else {
+        // Fallback: traverse model (backward compatible when cache not available)
+        let detectedMetalType = null;
+        model.traverse((obj) => {
+          if (obj.isMesh && obj.name) {
+            const objNameLower = obj.name.toLowerCase();
+            if (objNameLower.includes("silver") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
+              detectedMetalType = "silver";
+            } else if (objNameLower.includes("white") && objNameLower.includes("metal") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
+              detectedMetalType = "white";
             }
           }
-          
-          // Find corresponding mesh for PBR maps (fullBleed or shrunk)
-          if (!metalMatForMaps) {
-            let shouldMatch = false;
-            if (isFullBleed) {
+        });
+        
+        const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (materialType === "METAL" || meshNameLower.includes("silver")));
+        const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (materialType === "METAL_BOX" || meshNameLower.includes("white")));
+        
+        model.traverse((obj) => {
+          if (obj.isMesh && obj.material) {
+            const objNameLower = (obj.name || "").toLowerCase();
+            
+            if (!metalMatForColor) {
+              let shouldMatchFullBleed = false;
               if (isSilver) {
-                shouldMatch = objNameLower.includes("silver") && 
-                             (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                             !objNameLower.includes("artwork");
+                shouldMatchFullBleed = objNameLower.includes("silver") && 
+                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                                     !objNameLower.includes("artwork");
               } else if (isWhite) {
-                // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-                shouldMatch = objNameLower.includes("white") && 
-                             (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                             !objNameLower.includes("artwork");
+                shouldMatchFullBleed = objNameLower.includes("white") && 
+                                     (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                                     !objNameLower.includes("artwork");
               }
-            } else if (isShrunk) {
-              if (isSilver) {
-                shouldMatch = objNameLower.includes("silver") && 
-                             (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                             !objNameLower.includes("artwork");
-              } else if (isWhite) {
-                // Match Metal_White_Shrunk - simplified like silver (just check for "white")
-                shouldMatch = objNameLower.includes("white") && 
-                             (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                             !objNameLower.includes("artwork");
+              
+              if (shouldMatchFullBleed) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach((mat) => {
+                  if (mat.metalness !== undefined && mat.metalness > 0.4) {
+                    metalMatForColor = mat;
+                  }
+                });
               }
             }
             
-            if (shouldMatch) {
-              console.log(`[Metal PBR] Potential PBR maps match found: ${obj.name}`);
-              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-              mats.forEach((mat, idx) => {
-                console.log(`[Metal PBR] Checking material ${idx} from ${obj.name}: metalness=${mat.metalness}, hasNormalMap=${!!mat.normalMap}`);
-                if (mat.metalness !== undefined && mat.metalness > 0.4) {
-                  metalMatForMaps = mat;
-                  console.log(`[Metal PBR] ✓ Selected material for PBR maps: ${obj.name}, metalness: ${mat.metalness}`);
+            if (!metalMatForMaps) {
+              let shouldMatch = false;
+              if (isFullBleed) {
+                if (isSilver) {
+                  shouldMatch = objNameLower.includes("silver") && 
+                               (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                               !objNameLower.includes("artwork");
+                } else if (isWhite) {
+                  shouldMatch = objNameLower.includes("white") && 
+                               (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                               !objNameLower.includes("artwork");
                 }
-              });
+              } else if (isShrunk) {
+                if (isSilver) {
+                  shouldMatch = objNameLower.includes("silver") && 
+                               (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                               !objNameLower.includes("artwork");
+                } else if (isWhite) {
+                  shouldMatch = objNameLower.includes("white") && 
+                               (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                               !objNameLower.includes("artwork");
+                }
+              }
+              
+              if (shouldMatch) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach((mat) => {
+                  if (mat.metalness !== undefined && mat.metalness > 0.4) {
+                    metalMatForMaps = mat;
+                  }
+                });
+              }
             }
           }
-        }
-      });
+        });
+      }
       
       // Copy brushed metal finish if found
       if (metalMatForMaps || metalMatForColor) {
-        console.log(`[Metal PBR] Found metal background material for ${layer.meshName}, copying properties...`);
-        console.log(`[Metal PBR] metalMatForMaps: ${metalMatForMaps ? 'found' : 'not found'}, metalMatForColor: ${metalMatForColor ? 'found' : 'not found'}`);
-        
         // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
         if (metalMatForMaps) {
           if (metalMatForMaps.normalMap) {
@@ -863,15 +1018,25 @@ export default function TextureLayerManager({
           // Use frame's roughness (should be 1.0 from centralized preset), fallback to 1.0 if not set
           finalMat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 1.0;
           
-          // Copy environment map and intensity for reflections (should be 0.0 from centralized preset)
-          if (metalMatForMaps.envMap) {
-            finalMat.envMap = metalMatForMaps.envMap;
+          // CRITICAL: For locked metal materials, DO NOT modify envMapIntensity or specularIntensity
+          // These are controlled by MetalMaterial.applyMetalState() - the single source of truth
+          if (!isMetalLocked(finalMat)) {
+            // Only modify if NOT locked to metal system
+            // Copy environment map (but NOT intensity - let applyMetalState own intensity)
+            if (metalMatForMaps.envMap) {
+              finalMat.envMap = metalMatForMaps.envMap;
+            }
+            // DO NOT set envMapIntensity here - let MetalMaterial.applyMetalState() control it
+            
+            // Disable all specular and clearcoat properties to prevent light reflections and shininess
+            if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
+          } else {
+            // Material is locked to metal system - only copy maps, don't modify PBR properties
+            if (metalMatForMaps.envMap) {
+              finalMat.envMap = metalMatForMaps.envMap;
+            }
+            // DO NOT modify envMapIntensity, specularIntensity, or any other PBR properties
           }
-          // Use frame's envMapIntensity (should be 0.0 from centralized preset), fallback to 0.0 if not set
-          finalMat.envMapIntensity = metalMatForMaps.envMapIntensity !== undefined ? metalMatForMaps.envMapIntensity : 0.0;
-          
-          // Disable all specular and clearcoat properties to prevent light reflections and shininess
-          if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
           if (finalMat.clearcoat !== undefined) finalMat.clearcoat = 0.0;
           if (finalMat.clearcoatRoughness !== undefined) finalMat.clearcoatRoughness = 1.0;
           if (finalMat.sheen !== undefined) finalMat.sheen = 0.0;
@@ -881,20 +1046,29 @@ export default function TextureLayerManager({
         // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
         if (metalMatForColor && metalMatForColor.color) {
           finalMat.color.copy(metalMatForColor.color);
-          console.log(`Copied color from FullBleed: r=${metalMatForColor.color.r.toFixed(3)}, g=${metalMatForColor.color.g.toFixed(3)}, b=${metalMatForColor.color.b.toFixed(3)}`);
         } else if (metalMatForMaps && metalMatForMaps.color) {
           // Fallback: use color from corresponding mesh if FullBleed not found
           finalMat.color.copy(metalMatForMaps.color);
-          console.log(`Copied color from corresponding mesh: r=${metalMatForMaps.color.r.toFixed(3)}, g=${metalMatForMaps.color.g.toFixed(3)}, b=${metalMatForMaps.color.b.toFixed(3)}`);
         }
       } else {
-        console.warn(`Metal background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`Metal background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+        }
         // Fallback: Set metal properties even if frame material not found
-        finalMat.metalness = 1.0;
-        finalMat.roughness = 1.0; // Maximum roughness - completely matte, no shininess
-        finalMat.envMapIntensity = 0.0; // No reflections
-        // Disable all specular and clearcoat properties
-        if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
+        // CRITICAL: For locked metal materials, DO NOT modify envMapIntensity or specularIntensity
+        if (!isMetalLocked(finalMat)) {
+          // Only modify if NOT locked to metal system
+          finalMat.metalness = 1.0;
+          finalMat.roughness = 1.0; // Maximum roughness - completely matte, no shininess
+          // DO NOT set envMapIntensity here - let MetalMaterial.applyMetalState() control it
+          // Disable all specular and clearcoat properties
+          if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
+        } else {
+          // Material is locked - only set basic properties, don't modify PBR
+          finalMat.metalness = 1.0;
+          finalMat.roughness = 1.0;
+          // DO NOT modify envMapIntensity, specularIntensity, or any other PBR properties
+        }
         if (finalMat.clearcoat !== undefined) finalMat.clearcoat = 0.0;
         if (finalMat.clearcoatRoughness !== undefined) finalMat.clearcoatRoughness = 1.0;
         if (finalMat.sheen !== undefined) finalMat.sheen = 0.0;
@@ -956,65 +1130,65 @@ export default function TextureLayerManager({
       finalMat.depthWrite = false; // Important for transparency rendering
       
       finalMat.needsUpdate = true;
-      console.log(`Set matte properties for mirror artwork layer: "${layer.meshName}" (roughness: ${finalMat.roughness}, envMapIntensity: ${finalMat.envMapIntensity})`);
     }
     
     // For wood: Copy wood texture properties from corresponding wood background mesh
     if (isWood && (isFullBleed || isShrunk)) {
-      // Find the corresponding wood background mesh (Wood_FullBleed or Wood_Shrunk)
+      // Use MeshCache for optimized lookups (eliminates model traversal)
       let woodMatForColor = null; // Always from FullBleed for color consistency
       let woodMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
       
-      model.traverse((obj) => {
-        if (obj.isMesh && obj.material) {
-          const objNameLower = (obj.name || "").toLowerCase();
-          
-          // Always find FullBleed for color (ensures consistency)
-          if (!woodMatForColor) {
-            const shouldMatchFullBleed = objNameLower.includes("wood") && 
-                                        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed"));
+      // Use cache if available, otherwise fall back to traversal (backward compatible)
+      if (meshCache && !meshCache.isEmpty()) {
+        woodMatForColor = meshCache.getWoodMaterialForColor();
+        woodMatForMaps = meshCache.getWoodMaterialForMaps(isFullBleed);
+      } else {
+        // Fallback: traverse model (backward compatible when cache not available)
+        model.traverse((obj) => {
+          if (obj.isMesh && obj.material) {
+            const objNameLower = (obj.name || "").toLowerCase();
             
-            if (shouldMatchFullBleed) {
-              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-              mats.forEach((mat) => {
-                // Get the wood background material (not artwork material)
-                if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
-                  woodMatForColor = mat;
-                }
-              });
-            }
-          }
-          
-          // Find corresponding mesh for PBR maps (fullBleed or shrunk)
-          if (!woodMatForMaps) {
-            let shouldMatch = false;
-            if (isFullBleed) {
-              shouldMatch = objNameLower.includes("wood") && 
-                           (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                           !objNameLower.includes("artwork");
-            } else if (isShrunk) {
-              shouldMatch = objNameLower.includes("wood") && 
-                           (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                           !objNameLower.includes("artwork");
+            if (!woodMatForColor) {
+              const shouldMatchFullBleed = objNameLower.includes("wood") && 
+                                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed"));
+              
+              if (shouldMatchFullBleed) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach((mat) => {
+                  if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
+                    woodMatForColor = mat;
+                  }
+                });
+              }
             }
             
-            if (shouldMatch) {
-              const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-              mats.forEach((mat) => {
-                // Get the wood background material (not artwork material)
-                if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
-                  woodMatForMaps = mat;
-                }
-              });
+            if (!woodMatForMaps) {
+              let shouldMatch = false;
+              if (isFullBleed) {
+                shouldMatch = objNameLower.includes("wood") && 
+                             (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
+                             !objNameLower.includes("artwork");
+              } else if (isShrunk) {
+                shouldMatch = objNameLower.includes("wood") && 
+                             (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
+                             !objNameLower.includes("artwork");
+              }
+              
+              if (shouldMatch) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach((mat) => {
+                  if (!mat.map || (mat.map && !objNameLower.includes("artwork"))) {
+                    woodMatForMaps = mat;
+                  }
+                });
+              }
             }
           }
-        }
-      });
+        });
+      }
       
       // Copy wood texture properties if found
       if (woodMatForMaps || woodMatForColor) {
-        console.log(`Found wood background material for ${layer.meshName}, copying properties...`);
-        
         // Copy PBR maps from corresponding mesh (fullBleed or shrunk)
         if (woodMatForMaps) {
           if (woodMatForMaps.normalMap) {
@@ -1059,14 +1233,14 @@ export default function TextureLayerManager({
         // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
         if (woodMatForColor && woodMatForColor.color) {
           finalMat.color.copy(woodMatForColor.color);
-          console.log(`Copied color from Wood_FullBleed: r=${woodMatForColor.color.r.toFixed(3)}, g=${woodMatForColor.color.g.toFixed(3)}, b=${woodMatForColor.color.b.toFixed(3)}`);
         } else if (woodMatForMaps && woodMatForMaps.color) {
           // Fallback: use color from corresponding mesh if FullBleed not found
           finalMat.color.copy(woodMatForMaps.color);
-          console.log(`Copied color from corresponding wood mesh: r=${woodMatForMaps.color.r.toFixed(3)}, g=${woodMatForMaps.color.g.toFixed(3)}, b=${woodMatForMaps.color.b.toFixed(3)}`);
         }
       } else {
-        console.warn(`Wood background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`Wood background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
+        }
       }
       
       // Apply minimal transparency settings (matching working test app, same as metals)
@@ -1089,14 +1263,7 @@ export default function TextureLayerManager({
       finalMat.map.needsUpdate = true;
     }
 
-    // Force renderer update if available
-    if (renderer && scene && camera) {
-      try {
-        renderer.render(scene, camera);
-      } catch (e) {
-        // Error rendering scene
-      }
-    }
+    // Animation loop handles rendering automatically - no need for manual render
 
     // Call callback if provided
     if (onLayerChange) {
@@ -1141,10 +1308,17 @@ export default function TextureLayerManager({
       if (isMirror && (isFullBleed || isShrunk)) {
         const originalProps = originalMaterialPropertiesRef.current.get(layerId);
         if (originalProps) {
-          // Restore all material properties
-          if (originalProps.roughness !== undefined) mat.roughness = originalProps.roughness;
-          if (originalProps.metalness !== undefined) mat.metalness = originalProps.metalness;
-          if (originalProps.envMapIntensity !== undefined) mat.envMapIntensity = originalProps.envMapIntensity;
+          // CRITICAL: For locked metal materials, DO NOT restore PBR properties
+          // MetalMaterial.applyMetalState() is the single source of truth for metal materials
+          const isLocked = isMetalLocked(mat);
+          
+          // Restore all material properties (skip PBR for locked metals)
+          if (!isLocked) {
+            if (originalProps.roughness !== undefined) mat.roughness = originalProps.roughness;
+            if (originalProps.metalness !== undefined) mat.metalness = originalProps.metalness;
+            if (originalProps.envMapIntensity !== undefined) mat.envMapIntensity = originalProps.envMapIntensity;
+          }
+          // Always restore transparency/opacity settings (safe for all materials)
           if (originalProps.transparent !== undefined) mat.transparent = originalProps.transparent;
           if (originalProps.opacity !== undefined) mat.opacity = originalProps.opacity;
           if (originalProps.alphaTest !== undefined) mat.alphaTest = originalProps.alphaTest;
@@ -1160,17 +1334,11 @@ export default function TextureLayerManager({
           if (originalProps.clearcoatRoughnessMap !== undefined) mat.clearcoatRoughnessMap = originalProps.clearcoatRoughnessMap;
           if (originalProps.sheenColorMap !== undefined) mat.sheenColorMap = originalProps.sheenColorMap;
           if (originalProps.sheenRoughnessMap !== undefined) mat.sheenRoughnessMap = originalProps.sheenRoughnessMap;
-          
-          console.log(`Restored original material properties for mirror artwork layer: "${layer.meshName}"`);
         }
       }
       
       mat.needsUpdate = true;
-
-      // Force renderer update if available
-      if (renderer && scene && camera) {
-        renderer.render(scene, camera);
-      }
+      // Animation loop handles rendering automatically - no need for manual render
 
       // Call callback if provided
       if (onLayerChange) {
@@ -1295,9 +1463,7 @@ export default function TextureLayerManager({
                                 mat.map.offset.x = newX;
                                 mat.map.needsUpdate = true;
                                 mat.needsUpdate = true;
-                                if (renderer && scene && camera) {
-                                  renderer.render(scene, camera);
-                                }
+                                // Animation loop handles rendering automatically
                               }
                             }
                           }}
@@ -1343,9 +1509,7 @@ export default function TextureLayerManager({
                                 mat.map.offset.y = newY;
                                 mat.map.needsUpdate = true;
                                 mat.needsUpdate = true;
-                                if (renderer && scene && camera) {
-                                  renderer.render(scene, camera);
-                                }
+                                // Animation loop handles rendering automatically
                               }
                             }
                           }}
@@ -1381,9 +1545,7 @@ export default function TextureLayerManager({
                             mat.map.offset.set(0, 0);
                             mat.map.needsUpdate = true;
                             mat.needsUpdate = true;
-                            if (renderer && scene && camera) {
-                              renderer.render(scene, camera);
-                            }
+                            // Animation loop handles rendering automatically
                           }
                         }
                       }}
@@ -1442,9 +1604,7 @@ export default function TextureLayerManager({
                                 mat.map.repeat.set(newX, currentRepeat.y);
                                 mat.map.needsUpdate = true;
                                 mat.needsUpdate = true;
-                                if (renderer && scene && camera) {
-                                  renderer.render(scene, camera);
-                                }
+                                // Animation loop handles rendering automatically
                               }
                             }
                           }}

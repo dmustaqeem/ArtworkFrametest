@@ -46,7 +46,7 @@ export const METAL_FINISH_PRESETS = {
     roughnessArtwork: 1.0, // Artwork layer stays matte
     envMapIntensity: 0.0, // Artwork has no reflections
     envMapIntensityArtwork: 0.0, // No reflections on artwork
-    envMapIntensityMetal: 0.0, // No environment map reflections
+    envMapIntensityMetal: 1.2, // Subtle environment map reflections for polished metal
     anisotropy: 0.1, // Polished - minimal directional highlights
     anisotropyRotation: 0.0, // Brush direction
     sheen: 0.0, // No sheen - no reflections
@@ -68,7 +68,7 @@ export const METAL_FINISH_PRESETS = {
     roughnessArtwork: 1.0, // Artwork layer stays matte
     envMapIntensity: 0.0, // Artwork has no reflections
     envMapIntensityArtwork: 0.0, // No reflections on artwork
-    envMapIntensityMetal: 0.0, // No environment map reflections
+    envMapIntensityMetal: 1.2, // Subtle environment map reflections for polished metal
     anisotropy: 0.65, // Brushed metal - strong directional highlights
     anisotropyRotation: 0.0, // Brush direction (can be adjusted per mesh)
     sheen: 0.0, // No sheen - no reflections
@@ -429,7 +429,9 @@ export const snapshotOriginalMetal = (model) => {
  */
 export const applyMetalState = (model, renderer, state) => {
   if (!model) {
-    console.warn("[applyMetalState] No model provided");
+    if (process.env.NODE_ENV === 'development') {
+      console.warn("[applyMetalState] No model provided");
+    }
     return;
   }
   
@@ -445,8 +447,9 @@ export const applyMetalState = (model, renderer, state) => {
   const normalizedColor = metalColor ?? "brushed_silver";
   
   // Prevent duplicate execution - state version lock (idempotent)
-  // Include artworkBrightness in key so brightness changes trigger updates
-  const stateKey = `${metalFinish}_${normalizedColor}_${artworkBrightness}`;
+  // CRITICAL: Include showReflections and reflectionIntensity in key so reflection changes trigger updates
+  // Without this, reflection state changes are ignored due to early return
+  const stateKey = `${metalFinish}_${normalizedColor}_${artworkBrightness}_${showReflections ? 1 : 0}_${reflectionIntensity}`;
   if (model.userData?.__metalStateKey === stateKey) {
     return; // Already applied this exact state
   }
@@ -455,7 +458,9 @@ export const applyMetalState = (model, renderer, state) => {
   // Get preset from SINGLE SOURCE OF TRUTH
   let finishPreset = METAL_FINISH_PRESETS[metalFinish];
   if (!finishPreset) {
-    console.warn(`[applyMetalState] No preset found for finish: ${metalFinish}, using brushed`);
+    if (process.env.NODE_ENV === 'development') {
+      console.warn(`[applyMetalState] No preset found for finish: ${metalFinish}, using brushed`);
+    }
     finishPreset = METAL_FINISH_PRESETS.brushed;
   }
   
@@ -529,7 +534,9 @@ export const applyMetalState = (model, renderer, state) => {
           // ============================================
           const orig = mat.userData?.__originalMetal;
           if (!orig) {
-            console.warn(`[applyMetalState] No original snapshot found for ${obj.name} - call snapshotOriginalMetal() first!`);
+            if (process.env.NODE_ENV === 'development') {
+              console.warn(`[applyMetalState] No original snapshot found for ${obj.name} - call snapshotOriginalMetal() first!`);
+            }
             // Fallback: use current values (not ideal, but prevents crash)
             return;
           }
@@ -540,9 +547,10 @@ export const applyMetalState = (model, renderer, state) => {
           // ============================================
           
           // Clamp metalness and roughness to realistic ranges (prevents chalk-like appearance)
+          // Increased metalness slightly for better light source reflections
           if (mat.metalness !== undefined) {
             const metalnessValue = orig.metalness ?? 1.0;
-            mat.metalness = Math.max(0.85, Math.min(1.0, metalnessValue)); // Clamp 0.85-1.0
+            mat.metalness = Math.max(1, Math.min(1.0, metalnessValue)); // Increased to 0.98 for better light reflections
           }
           if (mat.roughness !== undefined) {
             // Use preset roughness for finish, but clamp original if it's reasonable
@@ -570,11 +578,12 @@ export const applyMetalState = (model, renderer, state) => {
           // Determine if reflections should be enabled
           const wantsReflections = !!showReflections;
           
-          // Apply environment map intensity from preset (enables grain visibility)
+          // Apply environment map intensity from preset (subtle reflections)
           // Keep envMap intact (uses scene.environment) - only set intensity
           mat.envMap = null; // Use scene.environment
           if (wantsReflections) {
-            mat.envMapIntensity = finishPreset.envMapIntensityMetal ?? 0.9;
+            // Apply preset intensity scaled by reflectionIntensity
+            mat.envMapIntensity = (finishPreset.envMapIntensityMetal ?? 0.6) * reflectionIntensity;
           } else {
             mat.envMapIntensity = 0.0;
           }
@@ -681,11 +690,10 @@ export const applyMetalState = (model, renderer, state) => {
             // ARTWORK LAYER PROPERTIES - NON-METALLIC FOR VIBRANCY
             // ============================================
             
-            // CRITICAL FIX: Reduce metalness to make artwork vibrant (not dull like metal)
-            // metalness = 1.0 makes it fully metallic, reducing diffuse lighting and making it dull
-            // Use low metalness (0.0-0.1) so artwork behaves like printed material, not metal
+            // Increased metalness slightly for light source reflections while keeping colors vibrant
+            // Low metalness (0.15-0.2) allows light reflections without making artwork look dull
             if (mat.metalness !== undefined) {
-              mat.metalness = 0.0; // Non-metallic for vibrant colors
+              mat.metalness = 0.55; // Slightly metallic for light reflections (increased from 0.18)
             }
             
             // Reduce roughness for less matte appearance (more vibrant)

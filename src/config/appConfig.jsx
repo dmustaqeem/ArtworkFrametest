@@ -96,7 +96,7 @@ export const getModelPath = (orientation, materialType, metalFinish = "brushed_s
     ACRYLIC: "Acrylic_450x675.glb",
     METAL: finish === "white" ? "Metal_White_450x675.glb" : "Metal_Silver_450x675.glb",
     METAL_BOX: finish === "white" ? "Metal_Box_White_450x675.glb" : "Metal_Box_Silver_450x675.glb",
-    WOOD: "Wood_Print.glb",
+    WOOD: "Wood_450x675.glb",
     MIRROR: "Mirror_450x675.glb",
   };
   

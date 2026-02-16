@@ -26,6 +26,8 @@ export class MeshVisibilityManager {
       acrylicBack: ['acrylic_back'],
       glass: ['glass', 'cover', 'plexi', 'acrylic_cover'],
     };
+    // Cache for classifyMeshType results - eliminates repeated string operations
+    this.meshTypeCache = new Map();
   }
 
   /**
@@ -36,122 +38,122 @@ export class MeshVisibilityManager {
    * - Wood: Artwork_FullBleed, Artwork_Shrunk, Frame_Edge, Wood_Back, Wood_FullBleed, Wood_Shrunk
    * - Mirror: Artwork_FullBleed, Artwork_Shrunk, Frame_Edge, Mirror_Back, Mirror_FullBleed, Mirror_Shrunk
    * - Acrylic: Artwork_FullBleed, Artwork_Shrunk, Frame_Edge, Acrylic_Back, Glass, Acrylic_FullBleed, Acrylic_Shrunk
+   * 
+   * Cached for performance - same mesh names return cached results
    */
   classifyMeshType(meshName) {
     if (!meshName) return "other";
     
+    // Check cache first
+    if (this.meshTypeCache.has(meshName)) {
+      return this.meshTypeCache.get(meshName);
+    }
+    
     const nameLower = meshName.toLowerCase();
+    
+    let result = null;
     
     // Check for glass first (most specific - must be checked before other acrylic meshes)
     if (nameLower.includes('glass') || nameLower.includes('cover') || nameLower.includes('plexi') || 
         nameLower.includes('acrylic_cover') || (nameLower.includes('acrylic') && nameLower.includes('cover'))) {
-      return "glass";
+      result = "glass";
     }
-    
     // Check for acrylic back (most specific - must be checked before generic back)
-    if (nameLower.includes('acrylic') && (nameLower.includes('back') || nameLower.includes('rear'))) {
-      return "acrylicBack";
+    else if (nameLower.includes('acrylic') && (nameLower.includes('back') || nameLower.includes('rear'))) {
+      result = "acrylicBack";
     }
-    
     // Check for mirror back first (most specific - must be checked before generic back)
-    if (nameLower.includes('mirror') && (nameLower.includes('back') || nameLower.includes('rear'))) {
-      return "mirrorBack";
+    else if (nameLower.includes('mirror') && (nameLower.includes('back') || nameLower.includes('rear'))) {
+      result = "mirrorBack";
     }
-    
     // Check for wood back (most specific - must be checked before generic back)
-    if (nameLower.includes('wood') && (nameLower.includes('back') || nameLower.includes('rear'))) {
-      return "woodBack";
+    else if (nameLower.includes('wood') && (nameLower.includes('back') || nameLower.includes('rear'))) {
+      result = "woodBack";
     }
-    
     // Check for white metal back (most specific - must be checked before generic back)
-    if (nameLower.includes('metal_box_white_back') || nameLower.includes('metal_white_back')) {
-      return "whiteMetalBack";
+    else if (nameLower.includes('metal_box_white_back') || nameLower.includes('metal_white_back')) {
+      result = "whiteMetalBack";
     }
-    
     // Check for silver metal back (most specific - must be checked before generic back)
-    if (nameLower.includes('metal_box_silver_back') || nameLower.includes('metal_silver_back')) {
-      return "silverMetalBack";
+    else if (nameLower.includes('metal_box_silver_back') || nameLower.includes('metal_silver_back')) {
+      result = "silverMetalBack";
     }
-    
     // Check for acrylic full bleed (Acrylic_FullBleed) - must be checked before artwork full bleed
-    if (nameLower.includes('acrylic') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "acrylicFullBleed";
+    else if (nameLower.includes('acrylic') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
+      result = "acrylicFullBleed";
     }
-    
     // Check for mirror full bleed (Mirror_FullBleed) - must be checked before artwork full bleed
-    if (nameLower.includes('mirror') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "mirrorFullBleed";
+    else if (nameLower.includes('mirror') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
+      result = "mirrorFullBleed";
     }
-    
     // Check for wood full bleed (Wood_FullBleed) - must be checked before artwork full bleed
-    if (nameLower.includes('wood') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "woodFullBleed";
+    else if (nameLower.includes('wood') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
+      result = "woodFullBleed";
     }
-    
     // Check for acrylic shrunk (Acrylic_Shrunk) - must be checked before artwork shrunk
-    if (nameLower.includes('acrylic') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "acrylicShrunk";
+    else if (nameLower.includes('acrylic') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
+      result = "acrylicShrunk";
     }
-    
     // Check for mirror shrunk (Mirror_Shrunk) - must be checked before artwork shrunk
-    if (nameLower.includes('mirror') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "mirrorShrunk";
+    else if (nameLower.includes('mirror') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
+      result = "mirrorShrunk";
     }
-    
     // Check for wood shrunk (Wood_Shrunk) - must be checked before artwork shrunk
-    if (nameLower.includes('wood') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "woodShrunk";
+    else if (nameLower.includes('wood') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
+      result = "woodShrunk";
     }
-    
     // Check for white metal full bleed (WhiteMetal_FullBleed)
-    if ((nameLower.includes('whitemetal') || (nameLower.includes('white') && nameLower.includes('metal'))) && 
+    else if ((nameLower.includes('whitemetal') || (nameLower.includes('white') && nameLower.includes('metal'))) && 
         (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "whiteMetalFullBleed";
+      result = "whiteMetalFullBleed";
     }
-    
     // Check for silver full bleed (Silver_FullBleed)
-    if (nameLower.includes('silver') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "silverFullBleed";
+    else if (nameLower.includes('silver') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
+      result = "silverFullBleed";
     }
-    
     // Check for artwork full bleed (Artwork_FullBleed)
-    if (nameLower.includes('artwork') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
-      return "fullBleed";
+    else if (nameLower.includes('artwork') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
+      result = "fullBleed";
     }
-    
     // Check for white metal shrunk (WhiteMetal_Shrunk)
-    if ((nameLower.includes('whitemetal') || (nameLower.includes('white') && nameLower.includes('metal'))) && 
+    else if ((nameLower.includes('whitemetal') || (nameLower.includes('white') && nameLower.includes('metal'))) && 
         (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "whiteMetalShrunk";
+      result = "whiteMetalShrunk";
     }
-    
     // Check for silver shrunk (Silver_Shrunk)
-    if (nameLower.includes('silver') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "silverShrunk";
+    else if (nameLower.includes('silver') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
+      result = "silverShrunk";
     }
-    
     // Check for artwork shrunk (Artwork_Shrunk)
-    if (nameLower.includes('artwork') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
-      return "shrunk";
+    else if (nameLower.includes('artwork') && (nameLower.includes('shrunk') || nameLower.includes('shrink'))) {
+      result = "shrunk";
     }
-    
     // Check for frame edge (Frame_Edge)
-    if (nameLower.includes('frame') && nameLower.includes('edge')) {
-      return "frame";
+    else if (nameLower.includes('frame') && nameLower.includes('edge')) {
+      result = "frame";
+    }
+    // Check for back meshes (generic)
+    else if (nameLower.includes('back') || nameLower.includes('rear')) {
+      result = "back";
     }
     
-    // Check for back meshes (generic)
-    if (nameLower.includes('back') || nameLower.includes('rear')) {
-      return "back";
+    // If we found a result, cache and return it
+    if (result) {
+      this.meshTypeCache.set(meshName, result);
+      return result;
     }
     
     // Fallback to keyword matching
     for (const [type, keywords] of Object.entries(this.meshTypeMap)) {
       if (keywords.some(keyword => nameLower.includes(keyword))) {
+        // Cache result before returning
+        this.meshTypeCache.set(meshName, type);
         return type;
       }
     }
     
+    // Cache "other" result
+    this.meshTypeCache.set(meshName, "other");
     return "other";
   }
 
@@ -641,6 +643,8 @@ export class MeshVisibilityManager {
    */
   clear() {
     this.meshes = [];
+    // Clear mesh type cache
+    this.meshTypeCache.clear();
   }
 }
 

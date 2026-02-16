@@ -28,7 +28,9 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   // CRITICAL: If material is locked to metal system, do not modify it
   // MetalMaterial.applyMetalState() is the ONLY place allowed to touch locked metal materials
   if (isMetalLocked(mat)) {
-    console.warn(`[applyPreset] Material is locked to METAL system - skipping modification. Use MetalMaterial.applyMetalState() instead.`);
+    if (process.env.NODE_ENV === 'development') {
+      console.warn(`[applyPreset] Material is locked to METAL system - skipping modification. Use MetalMaterial.applyMetalState() instead.`);
+    }
     return mat;
   }
   

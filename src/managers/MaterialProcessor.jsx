@@ -12,17 +12,19 @@ export class MaterialProcessor {
     this.baseEnvMapIntensities = new Map();
     
     // Log warnings if material module is invalid (but don't throw)
-    if (!materialModule) {
-      console.warn("MaterialProcessor: materialModule is null or undefined");
-    } else {
-      if (!materialModule.classify || typeof materialModule.classify !== 'function') {
-        console.warn("MaterialProcessor: materialModule is missing classify function");
-      }
-      if (!materialModule.preset) {
-        console.warn("MaterialProcessor: materialModule is missing preset object");
-      }
-      if (!materialModule.applyPreset || typeof materialModule.applyPreset !== 'function') {
-        console.warn("MaterialProcessor: materialModule is missing applyPreset function");
+    if (process.env.NODE_ENV === 'development') {
+      if (!materialModule) {
+        console.warn("MaterialProcessor: materialModule is null or undefined");
+      } else {
+        if (!materialModule.classify || typeof materialModule.classify !== 'function') {
+          console.warn("MaterialProcessor: materialModule is missing classify function");
+        }
+        if (!materialModule.preset) {
+          console.warn("MaterialProcessor: materialModule is missing preset object");
+        }
+        if (!materialModule.applyPreset || typeof materialModule.applyPreset !== 'function') {
+          console.warn("MaterialProcessor: materialModule is missing applyPreset function");
+        }
       }
     }
   }
@@ -98,7 +100,9 @@ export class MaterialProcessor {
    */
   processModelMaterials(model, options = {}) {
     if (!this.materialModule) {
-      console.error("MaterialProcessor: materialModule is null");
+      if (process.env.NODE_ENV === 'development') {
+        console.error("MaterialProcessor: materialModule is null");
+      }
       return { materialDetails: [], textureLayers: [] };
     }
 
@@ -314,7 +318,9 @@ export class MaterialProcessor {
    */
   updateMaterialsForType(model, options = {}) {
     if (!this.materialModule) {
-      console.error("MaterialProcessor: materialModule is null");
+      if (process.env.NODE_ENV === 'development') {
+        console.error("MaterialProcessor: materialModule is null");
+      }
       return;
     }
 
@@ -468,21 +474,23 @@ export class MaterialProcessor {
    * Set material module
    */
   setMaterialModule(materialModule) {
-    if (!materialModule) {
-      console.error("MaterialProcessor.setMaterialModule: materialModule is null");
-      return;
-    }
-    if (!materialModule.classify || typeof materialModule.classify !== 'function') {
-      console.error("MaterialProcessor.setMaterialModule: materialModule must have a classify function");
-      return;
-    }
-    if (!materialModule.preset) {
-      console.error("MaterialProcessor.setMaterialModule: materialModule must have a preset object");
-      return;
-    }
-    if (!materialModule.applyPreset || typeof materialModule.applyPreset !== 'function') {
-      console.error("MaterialProcessor.setMaterialModule: materialModule must have an applyPreset function");
-      return;
+    if (process.env.NODE_ENV === 'development') {
+      if (!materialModule) {
+        console.error("MaterialProcessor.setMaterialModule: materialModule is null");
+        return;
+      }
+      if (!materialModule.classify || typeof materialModule.classify !== 'function') {
+        console.error("MaterialProcessor.setMaterialModule: materialModule must have a classify function");
+        return;
+      }
+      if (!materialModule.preset) {
+        console.error("MaterialProcessor.setMaterialModule: materialModule must have a preset object");
+        return;
+      }
+      if (!materialModule.applyPreset || typeof materialModule.applyPreset !== 'function') {
+        console.error("MaterialProcessor.setMaterialModule: materialModule must have an applyPreset function");
+        return;
+      }
     }
     this.materialModule = materialModule;
   }
@@ -497,8 +505,210 @@ export class MaterialProcessor {
   /**
    * Analyze normalMap to understand its structure and patterns
    * Studies pixel data, directionality, and determines if it's a brushed pattern
+   * Returns a Promise that resolves with analysis - uses requestIdleCallback to avoid blocking
    */
   analyzeNormalMap(texture) {
+    // Return promise for async processing
+    return new Promise((resolve) => {
+      // Use requestIdleCallback to defer analysis when browser is idle
+      const processAnalysis = (deadline) => {
+        try {
+          if (!texture || !texture.image) {
+            resolve({ error: "No texture or image" });
+            return;
+          }
+
+          const image = texture.image;
+          let canvas = null;
+          let ctx = null;
+
+          // Get image data
+          if (image instanceof HTMLCanvasElement) {
+            canvas = image;
+            ctx = canvas.getContext('2d');
+          } else if (image instanceof HTMLImageElement) {
+            canvas = document.createElement('canvas');
+            canvas.width = image.width || image.naturalWidth || 512;
+            canvas.height = image.height || image.naturalHeight || 512;
+            ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+          } else {
+            resolve({ error: "Unsupported image type", imageType: image.constructor.name });
+            return;
+          }
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          
+          const analysis = {
+            dimensions: { width: canvas.width, height: canvas.height },
+            pixelCount: canvas.width * canvas.height,
+            rgbStats: {
+              r: { min: 255, max: 0, avg: 0 },
+              g: { min: 255, max: 0, avg: 0 },
+              b: { min: 255, max: 0, avg: 0 },
+            },
+            directionality: {
+              horizontal: 0,
+              vertical: 0,
+            },
+            patterns: {
+              isUniform: false,
+              hasDirectionalPattern: false,
+              isBrushed: false,
+              dominantDirection: null,
+            },
+            samples: {},
+          };
+
+          let rSum = 0, gSum = 0, bSum = 0;
+          const samplePoints = [
+            { x: Math.floor(canvas.width / 2), y: Math.floor(canvas.height / 2), name: "center" },
+            { x: 10, y: 10, name: "topLeft" },
+            { x: canvas.width - 10, y: 10, name: "topRight" },
+            { x: 10, y: canvas.height - 10, name: "bottomLeft" },
+            { x: canvas.width - 10, y: canvas.height - 10, name: "bottomRight" },
+          ];
+
+          // Chunked pixel processing to avoid blocking
+          const CHUNK_SIZE = 10000; // Process 10k pixels per chunk
+          let pixelIndex = 0;
+          const totalPixels = canvas.width * canvas.height;
+
+          const processChunk = () => {
+            const endIndex = Math.min(pixelIndex + CHUNK_SIZE, totalPixels);
+            
+            for (let i = pixelIndex * 4; i < endIndex * 4; i += 4) {
+              const r = data[i];
+              const g = data[i + 1];
+              const b = data[i + 2];
+              const px = (i / 4) % canvas.width;
+              const py = Math.floor((i / 4) / canvas.width);
+
+              // Update min/max
+              analysis.rgbStats.r.min = Math.min(analysis.rgbStats.r.min, r);
+              analysis.rgbStats.r.max = Math.max(analysis.rgbStats.r.max, r);
+              analysis.rgbStats.g.min = Math.min(analysis.rgbStats.g.min, g);
+              analysis.rgbStats.g.max = Math.max(analysis.rgbStats.g.max, g);
+              analysis.rgbStats.b.min = Math.min(analysis.rgbStats.b.min, b);
+              analysis.rgbStats.b.max = Math.max(analysis.rgbStats.b.max, b);
+
+              rSum += r;
+              gSum += g;
+              bSum += b;
+
+              // Store sample points
+              const samplePoint = samplePoints.find(sp => 
+                Math.abs(px - sp.x) < 5 && Math.abs(py - sp.y) < 5
+              );
+              if (samplePoint && !analysis.samples[samplePoint.name]) {
+                analysis.samples[samplePoint.name] = { r, g, b, x: px, y: py };
+              }
+            }
+
+            pixelIndex = endIndex;
+
+            // Continue processing if more pixels remain and we have time
+            if (pixelIndex < totalPixels) {
+              if (deadline && deadline.timeRemaining() > 0) {
+                processChunk();
+              } else {
+                // Yield to browser, continue in next idle period
+                requestIdleCallback((nextDeadline) => processChunk(), { timeout: 1000 });
+              }
+            } else {
+              // Finished processing all pixels
+              // Calculate averages
+              analysis.rgbStats.r.avg = Math.round(rSum / analysis.pixelCount);
+              analysis.rgbStats.g.avg = Math.round(gSum / analysis.pixelCount);
+              analysis.rgbStats.b.avg = Math.round(bSum / analysis.pixelCount);
+
+              // Analyze directionality (sampled for performance)
+              let horizontalVariation = 0;
+              let verticalVariation = 0;
+              const step = Math.max(1, Math.floor(canvas.width / 50));
+              let sampleCount = 0;
+
+              for (let y = 0; y < canvas.height; y += step) {
+                for (let x = 0; x < canvas.width - step; x += step) {
+                  const idx1 = (y * canvas.width + x) * 4;
+                  const idx2 = (y * canvas.width + x + step) * 4;
+                  horizontalVariation += Math.abs(data[idx1] - data[idx2]);
+                  horizontalVariation += Math.abs(data[idx1 + 1] - data[idx2 + 1]);
+                  sampleCount++;
+                }
+              }
+
+              for (let y = 0; y < canvas.height - step; y += step) {
+                for (let x = 0; x < canvas.width; x += step) {
+                  const idx1 = (y * canvas.width + x) * 4;
+                  const idx2 = ((y + step) * canvas.width + x) * 4;
+                  verticalVariation += Math.abs(data[idx1] - data[idx2]);
+                  verticalVariation += Math.abs(data[idx1 + 1] - data[idx2 + 1]);
+                }
+              }
+
+              analysis.directionality.horizontal = Math.round(horizontalVariation / sampleCount);
+              analysis.directionality.vertical = Math.round(verticalVariation / sampleCount);
+
+              // Pattern detection
+              const rRange = analysis.rgbStats.r.max - analysis.rgbStats.r.min;
+              const gRange = analysis.rgbStats.g.max - analysis.rgbStats.g.min;
+              const bRange = analysis.rgbStats.b.max - analysis.rgbStats.b.min;
+
+              analysis.patterns.isUniform = rRange < 10 && gRange < 10 && bRange < 10;
+              analysis.patterns.hasDirectionalPattern = Math.abs(analysis.directionality.horizontal - analysis.directionality.vertical) > 20;
+              analysis.patterns.isBrushed = analysis.patterns.hasDirectionalPattern && (rRange > 30 || gRange > 30);
+              
+              if (analysis.patterns.hasDirectionalPattern) {
+                analysis.patterns.dominantDirection = analysis.directionality.horizontal > analysis.directionality.vertical 
+                  ? "horizontal" 
+                  : "vertical";
+              }
+
+              // Normal map interpretation
+              const typicalNormal = { r: 128, g: 128, b: 255 };
+              const deviation = {
+                r: Math.abs(analysis.rgbStats.r.avg - typicalNormal.r),
+                g: Math.abs(analysis.rgbStats.g.avg - typicalNormal.g),
+                b: Math.abs(analysis.rgbStats.b.avg - typicalNormal.b),
+              };
+
+              analysis.interpretation = {
+                isTypicalNormalMap: deviation.r < 50 && deviation.g < 50 && deviation.b < 50,
+                surfaceType: analysis.rgbStats.b.avg > 200 ? "mostly flat" : "varied depth",
+                hasStrongDirection: analysis.patterns.hasDirectionalPattern,
+                direction: analysis.patterns.dominantDirection,
+                likelyBrushed: analysis.patterns.isBrushed && analysis.patterns.dominantDirection === "horizontal",
+                rgbRanges: { r: rRange, g: gRange, b: bRange },
+              };
+
+              resolve(analysis);
+            }
+          };
+
+          // Start processing
+          processChunk();
+        } catch (error) {
+          resolve({ error: `Analysis failed: ${error.message}` });
+        }
+      };
+
+      // Use requestIdleCallback if available, otherwise process immediately
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(processAnalysis, { timeout: 2000 });
+      } else {
+        // Fallback for browsers without requestIdleCallback
+        setTimeout(() => processAnalysis({ timeRemaining: () => Infinity }), 0);
+      }
+    });
+  }
+
+  /**
+   * Synchronous version of analyzeNormalMap (for backward compatibility)
+   * Use analyzeNormalMap() for async version
+   */
+  analyzeNormalMapSync(texture) {
     if (!texture || !texture.image) {
       return { error: "No texture or image" };
     }

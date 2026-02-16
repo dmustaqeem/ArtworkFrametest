@@ -113,10 +113,17 @@ export function useTextureLayers() {
     const originalProps = originalMaterialPropertiesRef.current.get(layerId);
     if (!originalProps || !material) return false;
 
-    // Restore all material properties
-    if (originalProps.roughness !== undefined) material.roughness = originalProps.roughness;
-    if (originalProps.metalness !== undefined) material.metalness = originalProps.metalness;
-    if (originalProps.envMapIntensity !== undefined) material.envMapIntensity = originalProps.envMapIntensity;
+    // CRITICAL: For locked metal materials, DO NOT restore PBR properties
+    // MetalMaterial.applyMetalState() is the single source of truth for metal materials
+    const isLocked = isMetalLocked(material);
+    
+    // Restore all material properties (skip PBR for locked metals)
+    if (!isLocked) {
+      if (originalProps.roughness !== undefined) material.roughness = originalProps.roughness;
+      if (originalProps.metalness !== undefined) material.metalness = originalProps.metalness;
+      if (originalProps.envMapIntensity !== undefined) material.envMapIntensity = originalProps.envMapIntensity;
+    }
+    // Always restore transparency/opacity settings (safe for all materials)
     if (originalProps.transparent !== undefined) material.transparent = originalProps.transparent;
     if (originalProps.opacity !== undefined) material.opacity = originalProps.opacity;
     if (originalProps.alphaTest !== undefined) material.alphaTest = originalProps.alphaTest;

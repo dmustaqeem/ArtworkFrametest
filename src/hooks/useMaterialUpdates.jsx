@@ -42,15 +42,8 @@ export function useMaterialUpdates({
         renderer
       );
     }
-    
-    // Force render update
-    const renderer = sceneManagerRef.current?.getRenderer();
-    const scene = sceneManagerRef.current?.getScene();
-    const camera = sceneManagerRef.current?.getCamera();
-    if (renderer && scene && camera) {
-      renderer.render(scene, camera);
-    }
-  }, [lighting.reflectionIntensity, materialType.materialModuleRef, modelManagerRef, materialProcessorRef, sceneManagerRef, environmentManagerRef]);
+    // Animation loop handles rendering automatically - no need for manual render
+  }, [lighting.reflectionIntensity]); // Refs are stable and don't need to be in dependencies
 
   // Update metal finish and color - handled by material module (only for METAL and METAL_BOX)
   // SINGLE SOURCE OF TRUTH: applyMetalState handles both finish and color changes
@@ -81,9 +74,7 @@ export function useMaterialUpdates({
     lighting.metalFinish,
     lighting.showReflections,
     lighting.reflectionIntensity,
-    materialType.materialModuleRef,
-    modelManagerRef,
-    sceneManagerRef,
+    // Refs are stable and don't need to be in dependencies
   ]);
 
   // Reload HDRI when switching to/from MIRROR material type
@@ -114,14 +105,16 @@ export function useMaterialUpdates({
           }
         },
         (error) => {
-          console.error("Failed to load HDRI for material type:", error);
+          if (process.env.NODE_ENV === 'development') {
+            console.error("Failed to load HDRI for material type:", error);
+          }
         }
       );
     }
     
     // Update previous material type
     previousMaterialTypeRef.current = activeMaterialType;
-  }, [materialType.activeMaterialType, environmentManagerRef, materialType, lighting, modelManagerRef, materialProcessorRef]);
+  }, [materialType.activeMaterialType]); // Only activeMaterialType triggers this effect; refs are stable
 
   // Re-apply materials when material type changes (skip for acrylics)
   useEffect(() => {
@@ -194,7 +187,14 @@ export function useMaterialUpdates({
     // CRITICAL: Do NOT re-apply metal state here after updateMaterials
     // This causes timing issues and "original captured after already modified" bugs
     // Metal state is handled by the consolidated reactive effect above (handles all UI changes)
-  }, [materialType.selectedMaterialType, materialType.materialTypeOverride, lighting, modelManagerRef, sceneManagerRef, environmentManagerRef, materialProcessorRef, materialType]);
+  }, [
+    materialType.selectedMaterialType, 
+    materialType.materialTypeOverride,
+    lighting.metalFinish, // Only specific lighting properties needed
+    lighting.reflectionIntensity,
+    materialType.metalColor,
+    // Refs are stable and don't need to be in dependencies
+  ]);
 
   // Toggle environment map - handled by material module (skip for acrylics)
   useEffect(() => {
@@ -224,7 +224,7 @@ export function useMaterialUpdates({
         renderer
       );
     }
-  }, [lighting.showReflections, lighting.reflectionIntensity, materialType.materialModuleRef, sceneManagerRef, environmentManagerRef, modelManagerRef, materialProcessorRef]);
+  }, [lighting.showReflections, lighting.reflectionIntensity]); // Refs are stable and don't need to be in dependencies
 
   // Update acrylic exposure (makes emissive intensity respond to renderer exposure)
   useEffect(() => {
@@ -237,13 +237,7 @@ export function useMaterialUpdates({
     // Only update exposure for acrylic materials
     if (activeType === "ACRYLIC" && materialType.materialModuleRef.current?.updateExposure) {
       materialType.materialModuleRef.current.updateExposure(model, renderer);
-      
-      // Force render update
-      const scene = sceneManagerRef.current?.getScene();
-      const camera = sceneManagerRef.current?.getCamera();
-      if (scene && camera) {
-        renderer.render(scene, camera);
-      }
+      // Animation loop handles rendering automatically - no need for manual render
     }
-  }, [lighting.exposure, materialType.materialModuleRef, modelManagerRef, sceneManagerRef]);
+  }, [lighting.exposure]); // Refs are stable and don't need to be in dependencies
 }

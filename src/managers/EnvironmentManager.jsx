@@ -22,13 +22,17 @@ export class EnvironmentManager {
   initialize() {
     // PMREMGenerator for environment mapping
     if (!this.renderer) {
-      console.error("EnvironmentManager: renderer is null, cannot create PMREMGenerator");
+      if (process.env.NODE_ENV === 'development') {
+        console.error("EnvironmentManager: renderer is null, cannot create PMREMGenerator");
+      }
       return;
     }
     
     // Ensure renderer is fully initialized
     if (!this.renderer.getContext) {
-      console.error("EnvironmentManager: renderer is not fully initialized");
+      if (process.env.NODE_ENV === 'development') {
+        console.error("EnvironmentManager: renderer is not fully initialized");
+      }
       return;
     }
     
@@ -38,7 +42,9 @@ export class EnvironmentManager {
         this.pmremGenerator.compileEquirectangularShader();
       }
     } catch (error) {
-      console.error("EnvironmentManager: Failed to create PMREMGenerator:", error);
+      if (process.env.NODE_ENV === 'development') {
+        console.error("EnvironmentManager: Failed to create PMREMGenerator:", error);
+      }
       this.pmremGenerator = null;
     }
   }

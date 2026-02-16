@@ -10,6 +10,7 @@ import {
   createTextureManager,
   createMeshVisibilityManager,
   createMaterialProcessor,
+  createMeshCache,
 } from "../managers/index.jsx";
 import {
   useMaterialType,
@@ -64,6 +65,7 @@ export function useArtworkViewer({
   const meshVisibilityManagerRef = useRef(null);
   const materialProcessorRef = useRef(null);
   const lightingManagerRef = useRef(null);
+  const meshCacheRef = useRef(null);
 
   // Hooks
   const materialType = useMaterialType();
@@ -492,21 +494,22 @@ export function useArtworkViewer({
     const meshVisibilityManager = createMeshVisibilityManager();
     meshVisibilityManagerRef.current = meshVisibilityManager;
 
+    // OPTIMIZATION: Load model and HDRI in parallel for faster scene loading
     // Preload mirror HDRI in background to avoid loading delay when switching to mirror mode
-    // This significantly improves performance when user selects mirror mode
     const mirrorHDRIPath = MODEL_PATHS.HDRI_MIRROR;
     environmentManager.preloadHDRI(
       mirrorHDRIPath,
       () => {
-        console.log("Mirror HDRI preloaded successfully");
+        // Mirror HDRI preloaded successfully
       },
       (error) => {
-        console.warn("Failed to preload mirror HDRI:", error);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn("Failed to preload mirror HDRI:", error);
+        }
       }
     );
 
-    // Load HDRI
-    // Always fallback to resolved material type if hdriPath is not provided
+    // Determine HDRI path
     const effectiveType =
       materialTypeProp ||
       materialType.activeMaterialTypeRef.current ||
@@ -515,53 +518,83 @@ export function useArtworkViewer({
     
     const hdriToLoad = hdriPath || getHDRIPath(effectiveType);
     
-    console.log("[HDRI INIT]", {
-      hdriProp: hdriPath,
-      effectiveType,
-      hdriToLoad,
-    });
+    // OPTIMIZATION: Start loading HDRI and model in parallel
+    let hdriLoaded = false;
+    let modelLoaded = false;
+    let loadedModel = null;
+    let loadedEnvMap = null;
+    let activeMaterialTypeForFinalize = null;
     
+    const checkAndApplyMaterials = () => {
+      // Only apply materials when both are loaded
+      if (!hdriLoaded || !modelLoaded || !loadedModel) return;
+      
+      const activeType = materialType.activeMaterialTypeRef.current;
+      const materialModule = materialType.materialModuleRef.current;
+      const renderer = sceneManagerRef.current?.getRenderer();
+
+      if (!materialModule || !renderer) return;
+
+      // For MIRROR: skip INIT load if setup() will handle it (prevents double-load)
+      if (activeType === "MIRROR") {
+        return;
+      }
+
+      // For acrylics: apply matte to artwork, glossy to glass
+      if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy && loadedEnvMap) {
+        materialModule.applyArtworkMatteGlassGlossy(
+          loadedModel,
+          loadedEnvMap,
+          lighting.reflectionIntensity
+        );
+        enforceAcrylicArtworkMatteGlassGlossy(
+          loadedModel,
+          loadedEnvMap,
+          lighting.reflectionIntensity
+        );
+      } else if (materialModule.updateMaterials && renderer && loadedEnvMap) {
+        materialModule.updateMaterials(
+          loadedModel,
+          loadedEnvMap,
+          lighting.showReflections,
+          lighting.reflectionIntensity,
+          materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+          renderer
+        );
+      }
+    };
+    
+    const finalizeScene = () => {
+      // Only finalize when both are loaded
+      if (!hdriLoaded || !modelLoaded || !loadedModel) return;
+      
+      const activeType = activeMaterialTypeForFinalize || materialType.activeMaterialTypeRef.current;
+      
+      // Finalize scene setup
+      if (activeType === "ACRYLIC" && loadedEnvMap) {
+        enforceAcrylicArtworkMatteGlassGlossy(
+          loadedModel,
+          loadedEnvMap,
+          lighting.reflectionIntensity
+        );
+      }
+
+      setLoading(false);
+
+      if (onReady && apiRef.current) {
+        onReady(apiRef.current);
+      }
+    };
+    
+    // Start loading HDRI in parallel with model
     if (hdriToLoad) {
       environmentManager.loadHDRI(
         hdriToLoad,
         (newEnvMap) => {
-          const model = modelManager.getModel();
-          if (model && materialType.materialModuleRef.current) {
-            const activeType = materialType.activeMaterialTypeRef.current;
-            const materialModule = materialType.materialModuleRef.current;
-            const renderer = sceneManagerRef.current?.getRenderer();
-
-            // For MIRROR: skip INIT load if setup() will handle it (prevents double-load)
-            // setup() will load the correct mirror HDRI when material type changes
-            if (activeType === "MIRROR") {
-              console.log("[HDRI INIT] Skipping MIRROR HDRI load - setup() will handle it");
-              return;
-            }
-
-            // For acrylics: apply matte to artwork, glossy to glass
-            if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy) {
-              materialModule.applyArtworkMatteGlassGlossy(
-                model,
-                newEnvMap,
-                lighting.reflectionIntensity
-              );
-              // Enforce overrides in case global updates touched them
-              enforceAcrylicArtworkMatteGlassGlossy(
-                model,
-                newEnvMap,
-                lighting.reflectionIntensity
-              );
-            } else if (materialModule.updateMaterials && renderer) {
-              materialModule.updateMaterials(
-                model,
-                newEnvMap,
-                lighting.showReflections,
-                lighting.reflectionIntensity,
-                materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
-                renderer
-              );
-            }
-          }
+          loadedEnvMap = newEnvMap;
+          hdriLoaded = true;
+          checkAndApplyMaterials();
+          finalizeScene();
         },
         (err) => {
           setError(err);
@@ -569,10 +602,17 @@ export function useArtworkViewer({
         }
       );
     } else {
-      console.warn("[HDRI] No HDRI resolved", { hdriPath, effectiveType });
+      // No HDRI to load, mark as loaded
+      hdriLoaded = true;
+      loadedEnvMap = environmentManager.getEnvironmentMap(); // Use existing if available
+      if (process.env.NODE_ENV === 'development') {
+        console.warn("[HDRI] No HDRI resolved", { hdriPath, effectiveType });
+      }
+      checkAndApplyMaterials();
+      finalizeScene();
     }
 
-    // Load model
+    // Load model in parallel with HDRI
     if (modelPath) {
       const activeMaterialType = materialType.activeMaterialType;
       materialType.activeMaterialTypeRef.current = activeMaterialType;
@@ -604,7 +644,7 @@ export function useArtworkViewer({
           lighting.setReflectionIntensity(defaultReflectionIntensity);
         }
 
-        // Load model
+        // Load model in parallel with HDRI
         modelManager.loadModel(
           modelPath,
           (model, boundingBox) => {
@@ -616,134 +656,112 @@ export function useArtworkViewer({
               return;
             }
 
-            // Collect meshes
-            const meshList = meshVisibilityManager.collectMeshes(model);
+            loadedModel = model;
+            modelLoaded = true;
+            activeMaterialTypeForFinalize = activeMaterialType;
 
-            // Apply visibility relationships for all materials (including metals)
-            // Metals follow the same rules: fullBleed ON → shrunk/frame OFF, shrunk ON → frame ON, fullBleed OFF
-            meshVisibilityManager.applyVisibilityRelationships();
+            // OPTIMIZATION: Show scene immediately, then process materials asynchronously
+            // This allows the model to render while processing happens in background
+            const processModelAsync = () => {
+              // Build mesh cache for optimized lookups (eliminates repeated traversals)
+              if (meshCacheRef.current) {
+                meshCacheRef.current.buildCache(model);
+              }
 
-            meshVisibilityHook.setMeshes(meshList);
+              // Collect meshes
+              const meshList = meshVisibilityManager.collectMeshes(model);
 
-            // Process materials
-            const processOptions = {
-              materialType: activeMaterialType,
-              metalFinish: lighting.metalFinish,
-              metalColor: materialType.metalColor,
-              reflectionIntensity: lighting.reflectionIntensity,
-              meshVisibilityManager: meshVisibilityManager,
+              // Apply visibility relationships for all materials (including metals)
+              meshVisibilityManager.applyVisibilityRelationships();
+
+              meshVisibilityHook.setMeshes(meshList);
+
+              // Process materials
+              const processOptions = {
+                materialType: activeMaterialType,
+                metalFinish: lighting.metalFinish,
+                metalColor: materialType.metalColor,
+                reflectionIntensity: lighting.reflectionIntensity,
+                meshVisibilityManager: meshVisibilityManager,
+              };
+
+              const { materialDetails, textureLayers: layers } =
+                materialProcessorRef.current.processModelMaterials(model, processOptions);
+
+              // Continue with rest of processing
+              processTextureLayers(layers);
             };
 
-            const { materialDetails, textureLayers: layers } =
-              materialProcessorRef.current.processModelMaterials(model, processOptions);
-
-            // Store texture layers
-            textureLayersHook.storeOriginalTextures(layers);
-            textureLayersHook.setAllTextureLayers(layers);
-
-            // For metals, mirrors, and acrylics, show all layers without filtering
-            // For other materials, apply filtering
-            const isMetal = activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX";
-            const isMirror = activeMaterialType === "MIRROR";
-            const isAcrylic = activeMaterialType === "ACRYLIC";
-
-            let filteredLayers;
-            if (isMetal || isMirror || isAcrylic) {
-              // For metals, mirrors, and acrylics: show all texture layers, no filtering
-              filteredLayers = layers;
+            // OPTIMIZATION: Defer heavy processing to allow scene to render immediately
+            // The model is already added to the scene by ModelManager, so it will render
+            // while material processing happens in the background
+            if (typeof requestIdleCallback !== 'undefined') {
+              // Use requestIdleCallback for optimal performance - processes during idle time
+              // Lower timeout (50ms) ensures processing starts quickly if browser is idle
+              requestIdleCallback(processModelAsync, { timeout: 50 });
             } else {
-              // Filter layers by visibility for other materials
-              filteredLayers = meshVisibilityManager.filterTextureLayersByMeshVisibility(
-                layers,
-                activeMaterialType
-              );
-
-              // Apply custom filter if provided
-              if (textureLayerFilter && typeof textureLayerFilter === 'function') {
-                filteredLayers = filteredLayers.filter(textureLayerFilter);
-              } else if (filterBackTextures) {
-                // Default: filter out back texture layers
-                filteredLayers = filteredLayers.filter((layer) => {
-                  const meshName = (layer.meshName || "").toLowerCase();
-                  const backKeywords = ["back", "rear", "behind"];
-                  return !backKeywords.some(keyword => meshName.includes(keyword));
-                });
-              }
-            }
-
-            textureLayersHook.setTextureLayers(filteredLayers);
-
-            // For acrylics, add a super‑white emissive base under the artwork surfaces
-            addAcrylicEmissiveBaseLayers(meshVisibilityManager, activeMaterialType);
-
-            // For acrylics, enforce matte artwork / glossy glass after all material updates
-            if (activeMaterialType === "ACRYLIC") {
-              const envMap = environmentManager.getEnvironmentMap();
-              enforceAcrylicArtworkMatteGlassGlossy(
-                model,
-                envMap,
-                lighting.reflectionIntensity
-              );
-            }
-
-            // MIRROR: Option A (PBR mirror) — do NOT replace meshes with Reflector
-            // Ensure original mirror meshes are visible (in case old reflector logic hid them)
-            if (activeMaterialType === "MIRROR") {
-              model.traverse((o) => {
-                if (!o.isMesh) return;
-                const n = (o.name || "").toLowerCase();
-                if (n === "mirror_fullbleed" || n === "mirror_shrunk") {
-                  o.visible = true;
-                }
+              // Fallback: use requestAnimationFrame to yield to browser, then setTimeout
+              requestAnimationFrame(() => {
+                setTimeout(processModelAsync, 0);
               });
             }
 
-            // Apply initial mode
-            if (modeProp) {
-              setMode(modeProp);
-            }
+            // Store reference for async processing
+            const processTextureLayers = (layers) => {
+              // Store texture layers
+              textureLayersHook.storeOriginalTextures(layers);
+              textureLayersHook.setAllTextureLayers(layers);
 
-            // Update materials with environment map
-            const envMap = environmentManager.getEnvironmentMap();
-            if (activeMaterialType === "ACRYLIC") {
-              // For acrylics: apply matte to artwork, glossy to glass
-              if (materialModule.applyArtworkMatteGlassGlossy && envMap) {
-                materialModule.applyArtworkMatteGlassGlossy(
-                  model,
-                  envMap,
-                  lighting.reflectionIntensity
+              // For metals, mirrors, and acrylics, show all layers without filtering
+              const isMetal = activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX";
+              const isMirror = activeMaterialType === "MIRROR";
+              const isAcrylic = activeMaterialType === "ACRYLIC";
+
+              let filteredLayers;
+              if (isMetal || isMirror || isAcrylic) {
+                filteredLayers = layers;
+              } else {
+                filteredLayers = meshVisibilityManager.filterTextureLayersByMeshVisibility(
+                  layers,
+                  activeMaterialType
                 );
+
+                if (textureLayerFilter && typeof textureLayerFilter === 'function') {
+                  filteredLayers = filteredLayers.filter(textureLayerFilter);
+                } else if (filterBackTextures) {
+                  filteredLayers = filteredLayers.filter((layer) => {
+                    const meshName = (layer.meshName || "").toLowerCase();
+                    const backKeywords = ["back", "rear", "behind"];
+                    return !backKeywords.some(keyword => meshName.includes(keyword));
+                  });
+                }
               }
-            } else {
-              const renderer = sceneManagerRef.current?.getRenderer();
-              
-              // For MIRROR: always call applyMirrorState (single source of truth)
-              // Pass envMap explicitly so mirror materials can reflect the HDRI
-              if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState && renderer) {
-                materialModule.applyMirrorState(model, renderer, {
-                  reflectionIntensity: lighting.reflectionIntensity,
-                  showReflections: lighting.showReflections,
-                  baseEnvMapIntensities: materialProcessor.getBaseEnvMapIntensities(),
-                  envMap: envMap, // Explicitly pass the HDRI envMap
+
+              textureLayersHook.setTextureLayers(filteredLayers);
+
+              // For acrylics, add emissive base layers
+              addAcrylicEmissiveBaseLayers(meshVisibilityManager, activeMaterialType);
+
+              // Apply initial mode
+              if (modeProp) {
+                setMode(modeProp);
+              }
+
+              // MIRROR: Ensure mirror meshes are visible
+              if (activeMaterialType === "MIRROR") {
+                model.traverse((o) => {
+                  if (!o.isMesh) return;
+                  const n = (o.name || "").toLowerCase();
+                  if (n === "mirror_fullbleed" || n === "mirror_shrunk") {
+                    o.visible = true;
+                  }
                 });
-              } else if (envMap && materialModule.updateMaterials && renderer) {
-                materialModule.updateMaterials(
-                  model,
-                  envMap,
-                  lighting.showReflections,
-                  lighting.reflectionIntensity,
-                  materialProcessor.getBaseEnvMapIntensities(),
-                  renderer
-                );
               }
-            }
 
-            setLoading(false);
-
-            // Call onReady with API
-            if (onReady && apiRef.current) {
-              onReady(apiRef.current);
-            }
+              // Check if both HDRI and model are loaded, then apply materials and finalize
+              checkAndApplyMaterials();
+              finalizeScene();
+            };
           },
           (err) => {
             setError(err);
@@ -802,6 +820,7 @@ export function useArtworkViewer({
 
   // Texture operations
   const textureOperations = useTextureOperations({
+    meshCacheRef,
     textureLayersHook,
     materialType,
     textureManagerRef,
@@ -1240,13 +1259,7 @@ export function useArtworkViewer({
 
           mat.needsUpdate = true;
 
-          // Force render
-          const scene = sceneManagerRef.current?.getScene();
-          const camera = sceneManagerRef.current?.getCamera();
-          const renderer = sceneManagerRef.current?.getRenderer();
-          if (renderer && scene && camera) {
-            renderer.render(scene, camera);
-          }
+          // Animation loop handles rendering automatically - no need for manual render
 
           // For acrylics: Ensure super-white emissive base layer exists after texture update
           // This is critical for API mode where textures are applied after initial setup
@@ -1315,14 +1328,7 @@ export function useArtworkViewer({
 
     mat.needsUpdate = true;
 
-    // Force render
-    const scene = sceneManagerRef.current?.getScene();
-    const camera = sceneManagerRef.current?.getCamera();
-    const renderer = sceneManagerRef.current?.getRenderer();
-    if (renderer && scene && camera) {
-      renderer.render(scene, camera);
-    }
-
+    // Animation loop handles rendering automatically - no need for manual render
     return true;
   };
 
@@ -1343,7 +1349,9 @@ export function useArtworkViewer({
   const updateTextures = async (texturesMap) => {
     const updates = Object.entries(texturesMap).map(([identifier, texturePath]) =>
       updateTexture(identifier, texturePath).catch((err) => {
-        console.warn(`Failed to update texture ${identifier}:`, err);
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`Failed to update texture ${identifier}:`, err);
+        }
         return null;
       })
     );
@@ -1413,14 +1421,7 @@ export function useArtworkViewer({
     mat.map = newTexture;
     mat.needsUpdate = true;
 
-    // Force render
-    const scene = sceneManagerRef.current?.getScene();
-    const camera = sceneManagerRef.current?.getCamera();
-    const renderer = sceneManagerRef.current?.getRenderer();
-    if (renderer && scene && camera) {
-      renderer.render(scene, camera);
-    }
-
+    // Animation loop handles rendering automatically - no need for manual render
     return true;
   };
 
@@ -1447,13 +1448,10 @@ export function useArtworkViewer({
   };
 
   // Force renderer update
+  // forceRender is no longer needed - animation loop handles rendering automatically
   const forceRender = () => {
-    const scene = sceneManagerRef.current?.getScene();
-    const camera = sceneManagerRef.current?.getCamera();
-    const renderer = sceneManagerRef.current?.getRenderer();
-    if (renderer && scene && camera) {
-      renderer.render(scene, camera);
-    }
+    // No-op: Animation loop in SceneManager handles all rendering
+    // This function is kept for API compatibility but does nothing
   };
 
   // ============================================
@@ -1702,30 +1700,13 @@ export function useArtworkViewer({
         // Use custom HDRI if provided, otherwise auto-select based on material type
         const hdriToLoad = customHdriPath || getHDRIPath(internalType);
         
-        console.log("[HDRI SETUP]", {
-          newMaterialType,
-          internalType,
-          customHdriPath,
-          hdriToLoad,
-          hasEnvManager: !!environmentManagerRef.current,
-        });
-        
         // Don't await HDRI loading - let it happen in parallel with texture application
         // This allows the scene to render faster
         environmentManagerRef.current.loadHDRI(
           hdriToLoad,
           (newEnvMap) => {
-            console.log("[HDRI SETUP] HDRI loaded successfully", {
-              hdriToLoad,
-              hasEnvMap: !!newEnvMap,
-            });
-            
             // Verify HDRI is actually applied to scene
             const scene = sceneManagerRef.current?.getScene();
-            console.log("[ENV CHECK]", {
-              sceneEnv: !!scene?.environment,
-              envMap: !!environmentManagerRef.current?.getEnvironmentMap?.(),
-            });
             
             const model = modelManagerRef.current?.getModel();
             if (model && materialType.materialModuleRef.current) {
@@ -1773,16 +1754,20 @@ export function useArtworkViewer({
             }
           },
           (error) => {
-            console.warn('[HDRI SETUP] HDRI loading failed:', {
-              hdriToLoad,
-              error,
-            });
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('[HDRI SETUP] HDRI loading failed:', {
+                hdriToLoad,
+                error,
+              });
+            }
           }
         );
       } else {
-        console.warn("[HDRI SETUP] environmentManagerRef.current is null, cannot load HDRI", {
-          newMaterialType,
-        });
+        if (process.env.NODE_ENV === 'development') {
+          console.warn("[HDRI SETUP] environmentManagerRef.current is null, cannot load HDRI", {
+            newMaterialType,
+          });
+        }
       }
 
       // 3. Apply artwork texture - optimize by only applying to active mode initially
@@ -1813,13 +1798,17 @@ export function useArtworkViewer({
           // Use setTimeout to defer, allowing browser to render first frame
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
-              console.warn('Failed to apply texture to deferred mode:', err);
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('Failed to apply texture to deferred mode:', err);
+              }
             });
           }, 100);
         } else if (otherMode === MODE_TYPES.SHRUNK && shrunkLayer) {
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
-              console.warn('Failed to apply texture to deferred mode:', err);
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('Failed to apply texture to deferred mode:', err);
+              }
             });
           }, 100);
         }
@@ -1923,14 +1912,7 @@ export function useArtworkViewer({
           mat.map = clonedTex;
           mat.needsUpdate = true;
 
-          // Force render
-          const scene = sceneManagerRef.current?.getScene();
-          const camera = sceneManagerRef.current?.getCamera();
-          const renderer = sceneManagerRef.current?.getRenderer();
-          if (renderer && scene && camera) {
-            renderer.render(scene, camera);
-          }
-
+          // Animation loop handles rendering automatically - no need for manual render
           resolve(true);
         },
         (err) => {
@@ -2139,7 +2121,9 @@ export function useArtworkViewer({
     setGlassVisibility: (visible) => {
       const activeType = materialType.activeMaterialTypeRef.current;
       if (activeType !== "ACRYLIC") {
-        console.warn("setGlassVisibility is only available for ACRYLIC material type");
+        if (process.env.NODE_ENV === 'development') {
+          console.warn("setGlassVisibility is only available for ACRYLIC material type");
+        }
         return false;
       }
       
@@ -2200,7 +2184,9 @@ export function useArtworkViewer({
     toggleGlassVisibility: () => {
       const activeType = materialType.activeMaterialTypeRef.current;
       if (activeType !== "ACRYLIC") {
-        console.warn("toggleGlassVisibility is only available for ACRYLIC material type");
+        if (process.env.NODE_ENV === 'development') {
+          console.warn("toggleGlassVisibility is only available for ACRYLIC material type");
+        }
         return false;
       }
       

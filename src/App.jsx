@@ -136,7 +136,9 @@ function App() {
       
       setStatus('Scene ready!');
     } catch (error) {
-      console.error('Setup error:', error);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Setup error:', error);
+      }
       setStatus(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -157,7 +159,9 @@ function App() {
       await viewerRef.current?.updateArtwork(artworkUrl);
       setStatus('Artwork updated!');
     } catch (error) {
-      console.error('Update error:', error);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Update error:', error);
+      }
       setStatus(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -178,7 +182,9 @@ function App() {
       await viewerRef.current?.updateFrame(frameUrl);
       setStatus('Frame updated!');
     } catch (error) {
-      console.error('Update error:', error);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Update error:', error);
+      }
       setStatus(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -230,7 +236,9 @@ function App() {
         
         setStatus(`Orientation changed to: ${newOrientation} - Scene reconfigured`);
       } catch (error) {
-        console.error('Failed to reconfigure scene with new orientation:', error);
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Failed to reconfigure scene with new orientation:', error);
+        }
         setStatus(`Error: Failed to load model for ${newOrientation} - ${error.message}`);
       } finally {
         setIsLoading(false);
@@ -304,10 +312,14 @@ function App() {
           }
         }
         
-        console.log(`[Material Change] Setup completed successfully for ${displayType}`);
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`[Material Change] Setup completed successfully for ${displayType}`);
+        }
         setStatus(`Material changed to: ${displayType} - Scene reconfigured automatically`);
       } catch (error) {
-        console.error('Failed to reconfigure scene with new material:', error);
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Failed to reconfigure scene with new material:', error);
+        }
         setStatus(`Error: Failed to load model for ${displayType} - ${error.message}`);
       } finally {
         setIsLoading(false);
@@ -377,7 +389,9 @@ function App() {
         <ArtworkViewer
           ref={viewerRef}
           onReady={(api) => {
-            console.log('Viewer ready!', api);
+            if (process.env.NODE_ENV === 'development') {
+              console.log('Viewer ready!', api);
+            }
             setStatus('Viewer ready - Upload artwork texture to start');
             // Use material-specific default reflection intensity for ACRYLIC and MIRROR
             const { internalType: currentInternalType } = getMaterialTypeInfo(materialType);
@@ -395,7 +409,9 @@ function App() {
             }
           }}
           onError={(error) => {
-            console.error('Viewer error:', error);
+            if (process.env.NODE_ENV === 'development') {
+              console.error('Viewer error:', error);
+            }
             setStatus(`Error: ${error}`);
           }}
           onModeChange={(mode) => {
