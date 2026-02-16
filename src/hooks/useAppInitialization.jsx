@@ -10,7 +10,7 @@ import {
   createMeshVisibilityManager,
   createMaterialProcessor,
 } from "../managers/index.jsx";
-import { MODEL_PATHS, SCENE_CONFIG, getHDRIPath } from "../config/appConfig.jsx";
+import { MODEL_PATHS, SCENE_CONFIG, getHDRIPath, getDefaultReflectionIntensity } from "../config/appConfig.jsx";
 
 /**
  * Custom hook to handle app initialization
@@ -171,6 +171,9 @@ function useAppInitialization({
       lightingManagerRef.current.applyMaterialDefaults(activeMaterialType);
       const newLighting = lightingManagerRef.current.getLighting();
       lighting.setLighting(newLighting);
+      // Set default reflectionIntensity based on material type
+      const defaultReflectionIntensity = getDefaultReflectionIntensity(activeMaterialType);
+      lighting.setReflectionIntensity(defaultReflectionIntensity);
     }
 
     // Load model (will be overridden by MaterialModelSelector if model path is provided)
@@ -241,12 +244,14 @@ function useAppInitialization({
         // Update materials with environment map if HDRI is already loaded
         const envMap = environmentManager.getEnvironmentMap();
         if (envMap && materialModule.updateMaterials) {
+          const renderer = sceneManagerRef.current?.getRenderer();
           materialModule.updateMaterials(
             model,
             envMap,
             lighting.showReflections,
             lighting.reflectionIntensity,
-            materialProcessor.getBaseEnvMapIntensities()
+            materialProcessor.getBaseEnvMapIntensities(),
+            renderer
           );
         }
 

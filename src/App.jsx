@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
-import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity } from './config/appConfig.jsx';
+import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES } from './config/appConfig.jsx';
 import './App.css';
 
 function App() {
@@ -8,6 +8,7 @@ function App() {
   const viewerRef = useRef(null);
   const [status, setStatus] = useState('Ready - Upload artwork texture to start');
   const [currentMode, setCurrentMode] = useState('fullBleed');
+  const [orientation, setOrientation] = useState(ORIENTATION_TYPES.PORTRAIT);
   const [materialType, setMaterialType] = useState('ACRYLIC');
   const [reflectionIntensity, setReflectionIntensity] = useState(() => getDefaultReflectionIntensity('ACRYLIC'));
   const [glassVisible, setGlassVisible] = useState(true);
@@ -100,8 +101,8 @@ function App() {
       // Get material type info (convert display type to internal type)
       const { internalType } = getMaterialTypeInfo(materialType);
       
-      // Get model path based on material type (models are automatically loaded from assets)
-      const modelPath = getModelPath(materialType);
+      // Get model path based on orientation and material type (models are automatically loaded from assets)
+      const modelPath = getModelPath(orientation, materialType);
       
       // Determine which HDR to use based on material type
       // Pass File object directly - EnvironmentManager will handle it
@@ -113,8 +114,9 @@ function App() {
       // Pass blob URL for textures and HDR (TextureLoader handles blob URLs fine)
       // Use internal type for setMaterialType
       await viewerRef.current?.setup({
-        modelPath: modelPath, // Auto-loaded model path based on material type
+        modelPath: modelPath, // Auto-loaded model path based on orientation and material type
         artworkTexture: artworkUrl,
+        orientation: orientation, // REQUIRED: portrait or landscape
         materialType: internalType, // Use internal type for viewer
         frameTexture: frameUrl || undefined,
         hdriPath: customHdrPath, // Custom HDR path based on material type
@@ -191,6 +193,51 @@ function App() {
     setStatus(`Mode switched to: ${newMode}`);
   };
 
+  // Handle orientation change
+  const handleOrientationChange = async (newOrientation) => {
+    setOrientation(newOrientation);
+    setStatus(`Orientation changed to: ${newOrientation}...`);
+    
+    // If artwork is already loaded, automatically call setup to reconfigure pipeline
+    if (artworkUrl && viewerRef.current) {
+      if (typeof viewerRef.current.setup !== 'function') {
+        setStatus(`Orientation changed to: ${newOrientation} - Setup function not available`);
+        return;
+      }
+      
+      setIsLoading(true);
+      try {
+        const { internalType } = getMaterialTypeInfo(materialType);
+        const newModelPath = getModelPath(newOrientation, materialType);
+        const customHdrPath = internalType === 'MIRROR' 
+          ? (hdrMirrorFile || undefined)
+          : (hdrFile || undefined);
+        
+        await viewerRef.current.setup({
+          modelPath: newModelPath,
+          artworkTexture: artworkUrl,
+          orientation: newOrientation,
+          materialType: internalType,
+          frameTexture: frameUrl || undefined,
+          hdriPath: customHdrPath,
+          mode: currentMode,
+        });
+        
+        const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
+        if (viewerRef.current && typeof viewerRef.current.setReflectionIntensity === 'function') {
+          viewerRef.current.setReflectionIntensity(defaultReflectionIntensity);
+        }
+        
+        setStatus(`Orientation changed to: ${newOrientation} - Scene reconfigured`);
+      } catch (error) {
+        console.error('Failed to reconfigure scene with new orientation:', error);
+        setStatus(`Error: Failed to load model for ${newOrientation} - ${error.message}`);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
   // Change material type
   const handleMaterialChange = async (displayType) => {
     // Get internal type and metal finish from display type
@@ -220,8 +267,8 @@ function App() {
       
       setIsLoading(true);
       try {
-        // Get new model path based on display type
-        const newModelPath = getModelPath(displayType);
+        // Get new model path based on orientation and display type
+        const newModelPath = getModelPath(orientation, displayType);
         
         // Determine which HDR to use based on internal material type
         const customHdrPath = internalType === 'MIRROR' 
@@ -235,6 +282,7 @@ function App() {
         await viewerRef.current.setup({
           modelPath: newModelPath,
           artworkTexture: artworkUrl,
+          orientation: orientation, // REQUIRED: portrait or landscape
           materialType: internalType, // Use internal type for viewer
           frameTexture: frameUrl || undefined,
           hdriPath: customHdrPath,
@@ -396,13 +444,16 @@ function App() {
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>File Uploads</h3>
           
-          {/* Model Info - Auto-loaded based on material type */}
+          {/* Model Info - Auto-loaded based on orientation and material type */}
           <div style={{ marginBottom: '15px', padding: '8px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px' }}>
             <div style={{ fontSize: '11px', color: '#4CAF50', marginBottom: '5px' }}>
-              ✓ Model: Auto-loaded based on material type
+              ✓ Model: Auto-loaded based on orientation & material type
             </div>
             <div style={{ fontSize: '10px', color: '#aaa' }}>
-              Current: {getMaterialTypeDisplayName(materialType)}
+              Orientation: {orientation.charAt(0).toUpperCase() + orientation.slice(1)}
+            </div>
+            <div style={{ fontSize: '10px', color: '#aaa' }}>
+              Material: {getMaterialTypeDisplayName(materialType)}
             </div>
           </div>
 
@@ -512,6 +563,45 @@ function App() {
                 ✓ {hdrMirrorFile.name}
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Orientation Selection */}
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Orientation</h3>
+          <div style={{ display: 'flex', gap: '5px' }}>
+            <button
+              onClick={() => handleOrientationChange(ORIENTATION_TYPES.PORTRAIT)}
+              style={{
+                flex: 1,
+                padding: '10px',
+                backgroundColor: orientation === ORIENTATION_TYPES.PORTRAIT ? '#4CAF50' : '#666',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              Portrait
+            </button>
+            <button
+              onClick={() => handleOrientationChange(ORIENTATION_TYPES.LANDSCAPE)}
+              style={{
+                flex: 1,
+                padding: '10px',
+                backgroundColor: orientation === ORIENTATION_TYPES.LANDSCAPE ? '#4CAF50' : '#666',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              Landscape
+            </button>
           </div>
         </div>
 

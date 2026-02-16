@@ -46,12 +46,29 @@ export const MATERIAL_TYPE_MAP = {
 };
 
 /**
- * Get model path based on material type
+ * Orientation types
+ */
+export const ORIENTATION_TYPES = {
+  PORTRAIT: "portrait",
+  LANDSCAPE: "landscape",
+};
+
+/**
+ * Get model path based on orientation and material type
+ * @param {string} orientation - Orientation type ('portrait' or 'landscape')
  * @param {string} materialType - Material type (can be display type like METAL_SILVER or internal type like METAL)
  * @param {string} metalFinish - Optional metal finish (brushed_silver or white) - defaults to brushed_silver
  * @returns {string} Model path
  */
-export const getModelPath = (materialType, metalFinish = "brushed_silver") => {
+export const getModelPath = (orientation, materialType, metalFinish = "brushed_silver") => {
+  // Validate orientation
+  if (!orientation || (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE)) {
+    throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
+  }
+
+  // Normalize orientation to match folder name (Potraits has typo in folder name)
+  const orientationFolder = orientation === ORIENTATION_TYPES.PORTRAIT ? "Potraits" : "Landscape";
+  
   // Check if it's a display type (has mapping)
   const materialMapping = MATERIAL_TYPE_MAP[materialType];
   
@@ -63,19 +80,30 @@ export const getModelPath = (materialType, metalFinish = "brushed_silver") => {
     finish = materialMapping.metalFinish || metalFinish;
   }
   
-  const modelPaths = {
-    ACRYLIC: "/assets/models/Acrylic/Acrylic_450x675.glb",
-    METAL: finish === "white" 
-      ? "/assets/models/Metal White/Metal_White_450x675.glb"
-      : "/assets/models/Metal Silver/Metal_Silver_450x675.glb",
-    METAL_BOX: finish === "white"
-      ? "/assets/models/Metal White Box/Metal_Box_White_450x675.glb"
-      : "/assets/models/Metal Silver Box/Metal_Box_Silver_450x675.glb",
-    WOOD: "/assets/models/Wood/Wood_Print.glb",
-    MIRROR: "/assets/models/Mirror/Mirror_450x675.glb",
+  // Map internal types to folder names
+  const materialFolderMap = {
+    ACRYLIC: "Acrylic",
+    METAL: finish === "white" ? "Metal White" : "Metal Silver",
+    METAL_BOX: finish === "white" ? "Metal White Box" : "Metal Silver Box",
+    WOOD: "Wood",
+    MIRROR: "Mirror",
   };
   
-  return modelPaths[internalType] || modelPaths.ACRYLIC;
+  const materialFolder = materialFolderMap[internalType] || materialFolderMap.ACRYLIC;
+  
+  // Map internal types to model file names
+  const modelFileMap = {
+    ACRYLIC: "Acrylic_450x675.glb",
+    METAL: finish === "white" ? "Metal_White_450x675.glb" : "Metal_Silver_450x675.glb",
+    METAL_BOX: finish === "white" ? "Metal_Box_White_450x675.glb" : "Metal_Box_Silver_450x675.glb",
+    WOOD: "Wood_Print.glb",
+    MIRROR: "Mirror_450x675.glb",
+  };
+  
+  const modelFile = modelFileMap[internalType] || modelFileMap.ACRYLIC;
+  
+  // Construct path: /assets/models/{orientation}/{materialFolder}/{modelFile}
+  return `/assets/models/${orientationFolder}/${materialFolder}/${modelFile}`;
 };
 
 /**
@@ -164,8 +192,12 @@ export const DEFAULT_STATE = {
  * @returns {number} Default reflection intensity
  */
 export const getDefaultReflectionIntensity = (materialType) => {
-  // Acrylic and Mirror use 0.50 by default
-  if (materialType === "ACRYLIC" || materialType === "MIRROR") {
+  // Acrylic uses 1.50 by default
+  if (materialType === "ACRYLIC") {
+    return 1.50;
+  }
+  // Mirror uses 0.50 by default
+  if (materialType === "MIRROR") {
     return 0.50;
   }
   // All other materials use the standard default

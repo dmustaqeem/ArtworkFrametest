@@ -1,6 +1,6 @@
 import React, { useRef, forwardRef, useEffect } from "react";
 import { useArtworkViewer } from "./useArtworkViewer.jsx";
-import { MODEL_PATHS, getHDRIPath } from "../config/appConfig.jsx";
+import { MODEL_PATHS, getHDRIPath, getMaterialTypeInfo } from "../config/appConfig.jsx";
 
 /**
  * ArtworkViewer - Plug-and-play Three.js component
@@ -82,7 +82,10 @@ const ArtworkViewer = forwardRef((props, ref) => {
   const apiRef = useRef(null);
 
   // Use mirror-specific HDRI for mirrors, otherwise use provided hdriPath or default
-  const finalHdriPath = hdriPath || getHDRIPath(materialType);
+  // Convert display type to internal type before HDRI lookup
+  const internalType =
+    getMaterialTypeInfo(materialType)?.internalType || materialType;
+  const finalHdriPath = hdriPath || getHDRIPath(internalType);
 
   const { loading, error } = useArtworkViewer({
     mountRef,

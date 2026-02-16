@@ -155,11 +155,6 @@ export class TextureManager {
     const h = image?.naturalHeight || image?.height || 0;
     const isPOT = w > 0 && h > 0 && TextureManager.isPowerOfTwo(w) && TextureManager.isPowerOfTwo(h);
     
-    // Log dimensions for debugging (can be removed in production)
-    if (options.crisp) {
-      console.log(`[TextureManager] Creating crisp texture: ${w}x${h}, POT: ${isPOT}`);
-    }
-    
     // Default settings (backward compatible)
     const useCrisp = options.crisp === true;
     const useRepeatWrapping = options.useRepeatWrapping === true;

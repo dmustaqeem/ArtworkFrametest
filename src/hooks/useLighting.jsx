@@ -3,10 +3,12 @@ import { DEFAULT_LIGHTING, DEFAULT_STATE } from "../config/appConfig.jsx";
 
 /**
  * Custom hook to manage lighting state and sync with LightingManager
+ * @param {Object} lightingManagerRef - Ref to LightingManager instance
+ * @param {number} initialReflectionIntensity - Optional initial reflection intensity value
  */
-export function useLighting(lightingManagerRef) {
+export function useLighting(lightingManagerRef, initialReflectionIntensity = DEFAULT_STATE.reflectionIntensity) {
   const [lighting, setLighting] = useState(DEFAULT_LIGHTING);
-  const [reflectionIntensity, setReflectionIntensity] = useState(DEFAULT_STATE.reflectionIntensity);
+  const [reflectionIntensity, setReflectionIntensity] = useState(initialReflectionIntensity);
   const [metalFinish, setMetalFinish] = useState(DEFAULT_STATE.metalFinish);
   const [showLightingControls, setShowLightingControls] = useState(DEFAULT_STATE.showLightingControls);
   const [showReflections, setShowReflections] = useState(DEFAULT_STATE.showReflections);

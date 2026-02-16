@@ -82,29 +82,30 @@ your-project/
 - Update relative paths in files that import from other folders
 - Example: If `viewer/` is in `src/components/viewer/`, update imports in `useArtworkViewer.jsx`
 
-### Step 4: Add HDRI File (Optional but Recommended)
+### Step 4: Add HDRI Files (Required)
 
-The component uses a default HDRI file. Add it to your `public` folder:
+The component automatically selects HDRI files based on material type. Add these files to your `public` folder:
 
 ```
 your-project/
 └── public/
     └── assets/
         └── hdr/
-            └── studio3.hdr        # Download or use your own HDRI file
+            ├── studio1.hdr        # Default HDRI for ACRYLIC, METAL, METAL_BOX, WOOD
+            └── studio2.hdr         # Special HDRI for MIRROR materials
 ```
 
-**Update HDRI path in `config/appConfig.jsx`:**
+**HDRI paths are configured in `config/appConfig.jsx`:**
 
 ```jsx
 export const MODEL_PATHS = {
-  GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",  // Not used in API mode
-  HDRI: "/assets/hdr/studio3.hdr",  // Update this path if needed
+  HDRI: "/assets/hdr/studio1.hdr",        // Default HDRI
+  HDRI_MIRROR: "/assets/hdr/studio2.hdr", // Mirror-specific HDRI
   // ...
 };
 ```
 
-**Note:** If you don't provide an HDRI file, the component will still work but without environment reflections.
+**Note:** HDRI files are automatically selected based on material type - no need to specify them in setup!
 
 ### Step 5: Verify File Structure
 
@@ -142,12 +143,21 @@ import { useRef } from 'react';
 function MyApp() {
   const viewerRef = useRef(null);
 
+  const setupScene = async () => {
+    await viewerRef.current?.setup({
+      artworkTexture: '/path/to/artwork.jpg',
+      orientation: 'portrait',  // or 'landscape'
+      materialType: 'ACRYLIC'
+    });
+  };
+
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
       <ArtworkViewer
         ref={viewerRef}
         onReady={() => {
           console.log('Viewer ready!');
+          setupScene();
         }}
       />
     </div>
@@ -179,25 +189,51 @@ const viewerRef = useRef(null);
 
 ### 1. Setup Scene
 
-**`setup(options)`** - Initialize everything with model, textures, and material type.
+**`setup(options)`** - Initialize everything with artwork, orientation, material type, and optional frame.
+**Model path and HDRI are automatically selected based on orientation and material type!**
 
 ```jsx
 await viewerRef.current?.setup({
-  modelPath: modelFile,        // File object or path to GLB
-  artworkTexture: textureUrl,  // Path or blob URL to artwork image
-  materialType: 'METAL',        // 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
-  frameTexture: frameUrl,      // Optional: Path or blob URL to frame image
-  mode: 'fullBleed'            // Optional: 'fullBleed' or 'shrunk' (default: 'fullBleed')
+  artworkTexture: textureUrl,  // REQUIRED: Path or blob URL to artwork image
+  orientation: 'portrait',      // REQUIRED: 'portrait' or 'landscape'
+  materialType: 'METAL',        // REQUIRED: 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
+  modelPath: modelFile,         // Optional: Custom model path (auto-selected if not provided)
+  frameTexture: frameUrl,       // Optional: Path or blob URL to frame image
+  mode: 'fullBleed',            // Optional: 'fullBleed' or 'shrunk' (default: 'fullBleed')
+  hdriPath: customHdriPath      // Optional: Custom HDRI path (auto-selected if not provided)
 });
 ```
 
-**Example:**
+**Simple Example (Recommended):**
+```jsx
+const handleSetup = async () => {
+  // That's it! Model path and HDRI are auto-selected based on orientation and material type
+  await viewerRef.current?.setup({
+    artworkTexture: artworkUrl,
+    orientation: 'portrait',     // Select portrait or landscape
+    materialType: 'ACRYLIC'      // Model and HDRI automatically selected
+  });
+};
+```
+
+**Landscape Example:**
 ```jsx
 const handleSetup = async () => {
   await viewerRef.current?.setup({
-    modelPath: modelFile,
+    artworkTexture: artworkUrl,
+    orientation: 'landscape',    // Use landscape models
+    materialType: 'METAL'
+  });
+};
+```
+
+**With Custom Model Path:**
+```jsx
+const handleSetup = async () => {
+  await viewerRef.current?.setup({
     artworkTexture: artworkUrl,
     materialType: 'METAL',
+    modelPath: customModelPath,  // Override auto-selection
     mode: 'fullBleed'
   });
 };
@@ -279,16 +315,17 @@ import { useRef, useState } from 'react';
 
 function MyApp() {
   const viewerRef = useRef(null);
-  const [modelFile, setModelFile] = useState(null);
   const [artworkUrl, setArtworkUrl] = useState(null);
+  const [orientation, setOrientation] = useState('portrait'); // 'portrait' or 'landscape'
+  const [materialType, setMaterialType] = useState('ACRYLIC');
 
   const handleSetup = async () => {
     try {
+      // Simple setup - model path and HDRI are auto-selected!
       await viewerRef.current?.setup({
-        modelPath: modelFile,
         artworkTexture: artworkUrl,
-        materialType: 'METAL',
-        mode: 'fullBleed'
+        orientation: orientation,  // 'portrait' or 'landscape'
+        materialType: materialType // Model and HDRI automatically selected
       });
       console.log('Scene ready!');
     } catch (error) {
@@ -325,10 +362,16 @@ function MyApp() {
 
 ## Notes
 
-- **Model Path**: Can be a File object (from file input) or a string path
+- **Orientation**: Must be specified as 'portrait' or 'landscape'. Models are organized in separate folders:
+  - Portrait models: `/assets/models/Potraits/{MaterialType}/`
+  - Landscape models: `/assets/models/Landscape/{MaterialType}/`
+- **Model Path**: Auto-selected based on orientation and material type. Can be overridden with custom File object or string path
+- **HDRI**: Automatically selected based on material type:
+  - `MIRROR` → Uses `studio2.hdr`
+  - All others (`ACRYLIC`, `METAL`, `METAL_BOX`, `WOOD`) → Uses `studio1.hdr`
 - **Texture Paths**: Can be blob URLs (from `URL.createObjectURL()`) or file paths
-- **HDRI**: Loads automatically from config (`/assets/hdr/studio3.hdr`) - no need to specify
 - **Draco Compression**: Supported automatically - no extra setup needed
+- **Setup is Simple**: Just provide `artworkTexture`, `orientation`, and `materialType` - everything else is automatic!
 
 ## Material Types
 
@@ -357,16 +400,23 @@ If you get import errors:
 ### HDRI Not Loading
 
 If HDRI doesn't load:
-1. **Check file exists** - Verify `public/assets/hdr/studio3.hdr` exists
-2. **Update path in config** - Edit `config/appConfig.jsx` and update `MODEL_PATHS.HDRI` if using different location
+1. **Check files exist** - Verify both `public/assets/hdr/studio1.hdr` and `studio2.hdr` exist
+2. **Update paths in config** - Edit `config/appConfig.jsx` and update `MODEL_PATHS.HDRI` and `MODEL_PATHS.HDRI_MIRROR` if using different locations
 3. **Check browser console** - Look for 404 errors or loading failures
+4. **Verify material type** - HDRI is auto-selected based on material type (MIRROR uses studio2.hdr, others use studio1.hdr)
 
 ### Model Not Loading
 
 If models don't load:
-1. **Verify File object** - Ensure you're passing a valid File object or path string
-2. **Check browser console** - Look for error messages
-3. **Validate GLB file** - Ensure model file is a valid GLB format
+1. **Model path is auto-selected** - Based on orientation and material type, so no need to specify unless using custom model
+2. **Verify orientation** - Must be 'portrait' or 'landscape' (case-sensitive)
+3. **Check folder structure** - Ensure models exist in:
+   - Portrait: `/public/assets/models/Potraits/{MaterialType}/`
+   - Landscape: `/public/assets/models/Landscape/{MaterialType}/`
+4. **Check browser console** - Look for error messages
+5. **Validate GLB file** - Ensure model file is a valid GLB format
+6. **Verify material type** - Ensure material type is one of: 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
+7. **Check model paths in config** - Verify `getModelPath()` in `config/appConfig.jsx` returns valid paths for your orientation and material types
 
 ### Path Issues
 

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { METAL_FINISH_PRESETS, isMetalLocked } from "./MetalMaterial.jsx";
 
 /**
  * Base material utilities shared across all material types
@@ -19,15 +20,21 @@ const METAL_COLOR_MAP = {
   white: new THREE.Color(0xffffff), // White color
 };
 
-// Metal finish presets
-const METAL_FINISH_PRESETS = {
-  polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-  brushed: { roughness: 0.75 }, // Very matte, minimal reflections, brushed texture
-};
 
 export const applyPreset = (material, preset, renderer, role, options = {}) => {
   let mat = material;
-  const { metalFinish = "polished", metalColor = null } = options;
+  const { materialType, metalColor } = options;
+  
+  // CRITICAL: If material is locked to metal system, do not modify it
+  // MetalMaterial.applyMetalState() is the ONLY place allowed to touch locked metal materials
+  if (isMetalLocked(mat)) {
+    console.warn(`[applyPreset] Material is locked to METAL system - skipping modification. Use MetalMaterial.applyMetalState() instead.`);
+    return mat;
+  }
+  
+  // Check if this is a metal type - if so, we'll early-return after material conversion
+  const isMetalType = materialType === "METAL" || materialType === "METAL_BOX";
+  
   
   // For PRINT role, if requiresPhysical is false, ensure we use StandardMaterial
   // This is critical for texture visibility - PhysicalMaterial with transmission can hide textures
@@ -66,11 +73,19 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
         phys.map.needsUpdate = true;
       }
     }
+    if (mat.alphaMap) phys.alphaMap = mat.alphaMap;
     if (mat.normalMap) phys.normalMap = mat.normalMap;
     if (mat.roughnessMap) phys.roughnessMap = mat.roughnessMap;
     if (mat.metalnessMap) phys.metalnessMap = mat.metalnessMap;
     phys.color.copy(mat.color || new THREE.Color(0xffffff));
     phys.name = mat.name;
+    // Preserve transparency basics
+    phys.transparent = mat.transparent || false;
+    phys.opacity = mat.opacity ?? 1.0;
+    phys.side = mat.side ?? THREE.FrontSide;
+    phys.depthWrite = mat.depthWrite ?? true;
+    phys.depthTest = mat.depthTest ?? true;
+    phys.alphaTest = mat.alphaTest ?? 0.0;
     // Preserve sheen properties if they exist on the original material
     if (mat.sheen !== undefined) phys.sheen = mat.sheen;
     if (mat.sheenRoughness !== undefined) phys.sheenRoughness = mat.sheenRoughness;
@@ -80,32 +95,32 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     mat = phys;
   }
   
+  // ✅ HARD LOCK: if METAL/METAL_BOX, stop here.
+  // MetalMaterial.applyMetalState is the ONLY place allowed to touch PBR + color + transparency.
+  if (isMetalType) {
+    // 🔒 Lock immediately on conversion - prevents any other system from modifying
+    if (!mat.userData) mat.userData = {};
+    mat.userData.__lockSystem = "METAL";
+    
+    mat.envMap = null;       // fine: forces scene.environment usage
+    mat.needsUpdate = true;
+    return mat;
+  }
+  
+  // ---- below this point: non-metal only ----
+  
   // Apply preset properties (only if they exist on the material)
   if (preset.metalness !== undefined && mat.metalness !== undefined) {
     mat.metalness = preset.metalness;
   }
   if (preset.roughness !== undefined && mat.roughness !== undefined) {
-    // Override roughness for metal based on finish
-    if (role === "METAL" && metalFinish && METAL_FINISH_PRESETS[metalFinish]) {
-      mat.roughness = METAL_FINISH_PRESETS[metalFinish].roughness;
-    } else {
-      mat.roughness = preset.roughness;
-    }
+    mat.roughness = preset.roughness;
   }
   if (preset.clearcoat !== undefined && mat.clearcoat !== undefined) {
     mat.clearcoat = preset.clearcoat;
   }
   if (preset.clearcoatRoughness !== undefined && mat.clearcoatRoughness !== undefined) {
     mat.clearcoatRoughness = preset.clearcoatRoughness;
-  }
-  if (preset.transmission !== undefined && mat.transmission !== undefined) {
-    mat.transmission = preset.transmission;
-  }
-  if (preset.ior !== undefined && mat.ior !== undefined) {
-    mat.ior = preset.ior;
-  }
-  if (preset.thickness !== undefined && mat.thickness !== undefined) {
-    mat.thickness = preset.thickness;
   }
   if (preset.specularIntensity !== undefined && mat.specularIntensity !== undefined) {
     mat.specularIntensity = preset.specularIntensity;
@@ -115,6 +130,16 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   }
   if (preset.sheenRoughness !== undefined && mat.sheenRoughness !== undefined) {
     mat.sheenRoughness = preset.sheenRoughness;
+  }
+  // These properties can be set for all materials (not PBR-specific)
+  if (preset.transmission !== undefined && mat.transmission !== undefined) {
+    mat.transmission = preset.transmission;
+  }
+  if (preset.ior !== undefined && mat.ior !== undefined) {
+    mat.ior = preset.ior;
+  }
+  if (preset.thickness !== undefined && mat.thickness !== undefined) {
+    mat.thickness = preset.thickness;
   }
   if (preset.sheenColor !== undefined && mat.sheenColor !== undefined) {
     mat.sheenColor.copy(preset.sheenColor);
@@ -133,7 +158,7 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     });
   }
   
-  // Role-specific handling
+  // Role-specific handling (non-metal only)
   if (role === "PRINT") {
     // For metal materials, use metal color (brushed_silver or white)
     // For wood materials, don't set white color (keep original to show texture without tinting)
@@ -189,7 +214,7 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
   if (role === "GLASS") {
     // Use brighter color for glass while maintaining transparency
     // Bright but not pure white to allow reflections to show through
-    mat.color = new THREE.Color(0xfafafa); // Very bright, almost white
+    mat.color.set(0xfafafa); // Very bright, almost white
     mat.transparent = true;
     mat.opacity = 1.0;
     if (preset.transmission !== undefined && mat.transmission !== undefined) {
@@ -228,13 +253,17 @@ export const applyPreset = (material, preset, renderer, role, options = {}) => {
     mat.opacity = 1.0;
   }
   
-  // Always use scene.environment (not per-material envMap)
-  // The main component will assign the environment map after HDRI loads
-  mat.envMap = null;
-  
-  // Ensure environment map intensity is set (will be adjusted by main component)
-  if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-    mat.envMapIntensity = preset.envBase || 1.0;
+  // Only non-metal materials may use envMap/envMapIntensity
+  // MetalMaterial.applyMetalState() is the ONLY authority for metal materials
+  if (!isMetalLocked(mat)) {
+    // Always use scene.environment (not per-material envMap)
+    // The main component will assign the environment map after HDRI loads
+    mat.envMap = null;
+    
+    // Ensure environment map intensity is set (will be adjusted by main component)
+    if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+      mat.envMapIntensity = preset.envBase || 1.0;
+    }
   }
   
   mat.needsUpdate = true;

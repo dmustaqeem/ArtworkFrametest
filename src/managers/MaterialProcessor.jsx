@@ -1,4 +1,4 @@
-import { isArtworkLayer } from "../materials/MirrorMaterial.jsx";
+// isArtworkLayer will be obtained from the active material module
 
 
 /**
@@ -28,6 +28,35 @@ export class MaterialProcessor {
   }
 
   /**
+   * Determine if a material should be locked to the metal system
+   * Only metal background meshes (not artwork) should be locked
+   */
+  _shouldLockMetalMaterial(materialType, meshType, role) {
+    if (!(materialType === "METAL" || materialType === "METAL_BOX")) return false;
+
+    // Artwork must NEVER be locked as metal
+    if (role === "PRINT") return false;
+
+    // Background metal meshes (the ones you already treat specially)
+    const isMetalBackground =
+      meshType === "silverFullBleed" ||
+      meshType === "silverShrunk" ||
+      meshType === "whiteMetalFullBleed" ||
+      meshType === "whiteMetalShrunk";
+
+    // If it's not artwork and is one of your metal BG meshes, it belongs to MetalMaterial system.
+    return isMetalBackground;
+  }
+
+  /**
+   * Determine if a material should be locked to the mirror system
+   * All mirror materials (including artwork) should be locked
+   */
+  _shouldLockMirrorMaterial(materialType) {
+    return materialType === "MIRROR";
+  }
+
+  /**
    * Apply material-type-specific post-processing
    * Handles special requirements like map removal for metals, render orders, etc.
    */
@@ -35,27 +64,27 @@ export class MaterialProcessor {
     const isMetal = materialType === "METAL" || materialType === "METAL_BOX";
     
     if (isMetal) {
-      // For metals: remove map texture from fullBleed and shrunk meshes
-      // but keep all PBR properties intact
-      const isFullBleedOrShrunk = meshType === "fullBleed" || 
-                                  meshType === "shrunk" ||
-                                  meshType === "silverFullBleed" ||
-                                  meshType === "silverShrunk" ||
-                                  meshType === "whiteMetalFullBleed" ||
-                                  meshType === "whiteMetalShrunk";
+      // ✅ NEVER remove artwork map (PRINT role) - preserves PNG clarity
+      // Only remove maps on metal background meshes (never on artwork PRINT layer)
+      const isArtwork = role === "PRINT";
+      const isMetalBackground =
+        meshType === "silverFullBleed" ||
+        meshType === "silverShrunk" ||
+        meshType === "whiteMetalFullBleed" ||
+        meshType === "whiteMetalShrunk";
       
-      if (isFullBleedOrShrunk && updatedMat.map) {
+      // Only remove map if it's a metal background mesh (not artwork)
+      if (!isArtwork && isMetalBackground && updatedMat.map) {
         updatedMat.map = null;
         updatedMat.needsUpdate = true;
       }
       
-      // Set render order for metals to ensure correct layering
-      // Artwork layer (fullBleed/shrunk) should be on top, metal background (silverFullBleed/silverShrunk) below
+      // ✅ Render order layering
+      // Artwork layer (fullBleed/shrunk) should be on top, metal background below
       if (meshType === "fullBleed" || meshType === "shrunk") {
-        obj.renderOrder = 2; // Artwork layer - render on top
-      } else if (meshType === "silverFullBleed" || meshType === "whiteMetalFullBleed" || 
-                 meshType === "silverShrunk" || meshType === "whiteMetalShrunk") {
-        obj.renderOrder = 1; // Metal background - render below artwork
+        obj.renderOrder = 2; // artwork on top
+      } else if (isMetalBackground) {
+        obj.renderOrder = 1; // background below artwork
       } else {
         obj.renderOrder = 0; // Default for frame, back, etc.
       }
@@ -97,6 +126,12 @@ export class MaterialProcessor {
         : "other";
 
       mats.forEach((mat, matIndex) => {
+        // HARD STOP: never touch locked system materials (METAL or MIRROR)
+        // Must check BEFORE any processing to prevent modifications
+        if (mat.userData?.__lockSystem === "METAL" || mat.userData?.__lockSystem === "MIRROR") {
+          return; // NEVER touch locked systems
+        }
+        
         // Unified classification for all material types
         const role = this.materialModule.classify({
           meshName,
@@ -104,6 +139,86 @@ export class MaterialProcessor {
           materialType,
           metalColor: (materialType === "METAL" || materialType === "METAL_BOX") ? metalColor : null
         });
+
+        // ✅ LOCK MIRROR SYSTEM MATERIALS *BEFORE* applyPreset touches them
+        // MirrorMaterial.applyMirrorState is the single source of truth
+        if (this._shouldLockMirrorMaterial(materialType)) {
+          mat.userData = mat.userData || {};
+          mat.userData.__lockSystem = "MIRROR";
+
+          // Still collect layers + details, but DO NOT apply preset pipeline here
+          // (MirrorMaterial.applyMirrorState is the single source of truth)
+          
+          // Collect texture layer info (keep map)
+          const hasMap = !!mat.map;
+          if (hasMap) {
+            const layerId = `layer_${layerIdCounter++}`;
+            textureLayers.push({
+              id: layerId,
+              meshName,
+              materialIndex: matIndex,
+              mapType: "map",
+              hasOriginal: true,
+              material: mat,
+              mesh: obj,
+              materialCategory: role,
+              meshType,
+            });
+          }
+
+          // Store material details
+          materialDetails.push({
+            meshName,
+            materialIndex: matIndex,
+            materialName: mat.name || `Material_${matIndex}`,
+            materialType: mat?.type || "UnknownMaterial",
+            materialClass: mat.constructor.name,
+            materialCategory: role,
+          });
+
+          return; // HARD STOP: no preset, no env intensity, no post-processing
+        }
+
+        // ✅ LOCK METAL SYSTEM MATERIALS *BEFORE* applyPreset touches them
+        if (this._shouldLockMetalMaterial(materialType, meshType, role)) {
+          mat.userData = mat.userData || {};
+          mat.userData.__lockSystem = "METAL";
+
+          // Also ensure render order + map removal logic still applies
+          this._applyMaterialTypePostProcessing(obj, mat, materialType, meshType, role);
+
+          // Still collect texture layer info if needed
+          const hasMap = !!mat.map;
+          const isMetalFullBleedOrShrunk = true; // these BG meshes are part of metal stack anyway
+
+          if (hasMap || isMetalFullBleedOrShrunk) {
+            const layerId = `layer_${layerIdCounter++}`;
+            textureLayers.push({
+              id: layerId,
+              meshName,
+              materialIndex: matIndex,
+              mapType: "map",
+              hasOriginal: hasMap,
+              material: mat,
+              mesh: obj,
+              materialCategory: role,
+              meshType: meshType,
+            });
+          }
+
+          // Store material details
+          materialDetails.push({
+            meshName,
+            materialIndex: matIndex,
+            materialName: mat.name || `Material_${matIndex}`,
+            materialType: mat?.type || "UnknownMaterial",
+            materialClass: mat.constructor.name,
+            materialCategory: role,
+          });
+
+          // HARD STOP: do NOT run preset pipeline on metal system materials
+          return;
+        }
 
         // Get preset for this role
         const preset = this.materialModule.preset[role] || this.materialModule.preset.DEFAULT;
@@ -134,14 +249,21 @@ export class MaterialProcessor {
         // Store base environment intensity
         if (preset.envBase !== undefined) {
           this.baseEnvMapIntensities.set(updatedMat, preset.envBase);
-          updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
+          // NEVER set envMapIntensity for locked systems - use lock-based detection (bulletproof)
+          const isLockedMetal = updatedMat.userData?.__lockSystem === "METAL";
+          const isLockedMirror = updatedMat.userData?.__lockSystem === "MIRROR";
+          if (!isLockedMetal && !isLockedMirror) {
+            updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
+          }
+          // For metals, envMapIntensity will be set by MetalMaterial.applyMetalState() only
+          // For mirrors, envMapIntensity will be set by MirrorMaterial.applyMirrorState() only
         }
 
         // Apply material-type-specific post-processing
         this._applyMaterialTypePostProcessing(obj, updatedMat, materialType, meshType, role);
 
         // Apply render order from preset (if not overridden by post-processing)
-        if (preset.renderOrder !== undefined && preset.renderOrder !== 0 && obj.renderOrder === undefined) {
+        if (preset.renderOrder !== undefined && preset.renderOrder !== 0 && obj.renderOrder === 0) {
           obj.renderOrder = preset.renderOrder;
         }
 
@@ -201,6 +323,7 @@ export class MaterialProcessor {
       metalFinish,
       metalColor,
       reflectionIntensity = 1.0,
+      meshVisibilityManager, // Optional: for mesh type classification
     } = options;
 
     model.traverse((obj) => {
@@ -209,11 +332,29 @@ export class MaterialProcessor {
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       const meshName = obj.name || "";
 
+      // Get mesh type if meshVisibilityManager is provided
+      const meshType = meshVisibilityManager
+        ? meshVisibilityManager.classifyMeshType(meshName)
+        : "other";
+
       mats.forEach((mat, matIndex) => {
-        // CRITICAL: For mirror, metal, and metal box materials, skip artwork layers that have already been modified
+        // HARD STOP: never touch locked system materials (METAL or MIRROR)
+        // Must check BEFORE any processing to prevent modifications
+        if (mat.userData?.__lockSystem === "METAL" || mat.userData?.__lockSystem === "MIRROR") {
+          return; // Skip locked materials completely
+        }
+        
+        // CRITICAL: For metal and metal box materials, skip artwork layers that have already been modified
         // Artwork layers maintain their own brightness and properties and should NEVER be re-processed
         // This prevents them from being overwritten when UI controls trigger re-renders or material type changes
-        if ((materialType === "MIRROR" || materialType === "METAL" || materialType === "METAL_BOX") && isArtworkLayer(obj, mat)) {
+        // NOTE: MIRROR is NOT included here - MirrorMaterial.applyMirrorState should always re-assert truth
+        // Use module-driven isArtworkLayer check (not hardcoded from MirrorMaterial)
+        const isArtwork = this.materialModule?.isArtworkLayer
+          ? this.materialModule.isArtworkLayer(obj, mat)
+          : false;
+        
+        // Only skip artwork re-processing for METAL systems (if you still need this behavior)
+        if ((materialType === "METAL" || materialType === "METAL_BOX") && isArtwork) {
           return; // Skip this material, preserve its properties
         }
         
@@ -224,6 +365,23 @@ export class MaterialProcessor {
           materialType,
           metalColor: (materialType === "METAL" || materialType === "METAL_BOX") ? metalColor : null
         });
+
+        // ✅ LOCK MIRROR SYSTEM MATERIALS *BEFORE* applyPreset touches them
+        // MirrorMaterial.applyMirrorState is the single source of truth
+        if (this._shouldLockMirrorMaterial(materialType)) {
+          mat.userData = mat.userData || {};
+          mat.userData.__lockSystem = "MIRROR";
+          // DO NOT apply preset pipeline - MirrorMaterial.applyMirrorState handles everything
+          return;
+        }
+
+        // ✅ LOCK + BYPASS preset pipeline for metal system materials
+        if (this._shouldLockMetalMaterial(materialType, meshType, role)) {
+          mat.userData = mat.userData || {};
+          mat.userData.__lockSystem = "METAL";
+          this._applyMaterialTypePostProcessing(obj, mat, materialType, meshType, role);
+          return;
+        }
 
         // Get preset for this role
         const preset = this.materialModule.preset[role] || this.materialModule.preset.DEFAULT;
@@ -254,17 +412,21 @@ export class MaterialProcessor {
         // Update environment intensity
         if (preset.envBase !== undefined) {
           this.baseEnvMapIntensities.set(updatedMat, preset.envBase);
-          updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
+          // NEVER set envMapIntensity for locked systems - use lock-based detection (bulletproof)
+          const isLockedMetal = updatedMat.userData?.__lockSystem === "METAL";
+          const isLockedMirror = updatedMat.userData?.__lockSystem === "MIRROR";
+          if (!isLockedMetal && !isLockedMirror) {
+            updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
+          }
+          // For metals, envMapIntensity will be set by MetalMaterial.applyMetalState() only
+          // For mirrors, envMapIntensity will be set by MirrorMaterial.applyMirrorState() only
         }
-
-        // Get mesh type for post-processing
-        const meshType = "other"; // Default for updateMaterialsForType (no meshVisibilityManager)
 
         // Apply material-type-specific post-processing
         this._applyMaterialTypePostProcessing(obj, updatedMat, materialType, meshType, role);
 
         // Apply render order from preset (if not overridden by post-processing)
-        if (preset.renderOrder !== undefined && preset.renderOrder !== 0 && obj.renderOrder === undefined) {
+        if (preset.renderOrder !== undefined && preset.renderOrder !== 0 && obj.renderOrder === 0) {
           obj.renderOrder = preset.renderOrder;
         }
       });
@@ -281,10 +443,17 @@ export class MaterialProcessor {
     }
 
     // Fallback: update stored intensities
+    // CRITICAL: For locked systems, DO NOT set envMapIntensity here - use lock-based detection (bulletproof)
     this.baseEnvMapIntensities.forEach((baseIntensity, mat) => {
-      if (mat.envMapIntensity !== undefined) {
+      // Check lock system tag (bulletproof detection)
+      const isLockedMetal = mat.userData?.__lockSystem === "METAL";
+      const isLockedMirror = mat.userData?.__lockSystem === "MIRROR";
+      if (mat.envMapIntensity !== undefined && !isLockedMetal && !isLockedMirror) {
+        // Only update envMapIntensity for non-locked materials
         mat.envMapIntensity = baseIntensity * reflectionIntensity;
       }
+      // For metals, envMapIntensity will be set by MetalMaterial.applyMetalState()
+      // For mirrors, envMapIntensity will be set by MirrorMaterial.applyMirrorState()
     });
   }
 

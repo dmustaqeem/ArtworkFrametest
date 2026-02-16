@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { applyPreset } from "./BaseMaterial.jsx";
+import { METAL_FINISH_PRESETS, applyMetalState } from "./MetalMaterial.jsx"; // Use centralized finish presets
 
 /**
  * Metal Box Material Module
@@ -8,24 +9,24 @@ import { applyPreset } from "./BaseMaterial.jsx";
 
 export const METAL_BOX_PRESET = {
   PRINT: {
-    metalness: 1.0, // Full metalness for complete metallic blending with metal layer
-    roughness: 0.95, // Extremely low shininess - very matte brushed metal (same as metal layer)
+    metalness: 0.0, // Non-metallic for vibrant artwork colors (not dull like metal)
+    roughness: 0.4, // Moderate roughness - less matte, more vibrant
     clearcoat: 0,
-    clearcoatRoughness: 0,
+    clearcoatRoughness: 1.0, // Maximum clearcoat roughness
     envBase: 0.0, // No reflections on metal
     specularIntensity: 0.0, // No specular for fully matte finish
     keepMaps: ["map"], // Only keep color map, remove PBR maps
-    requiresPhysical: true, // Use PhysicalMaterial for anisotropy support
-    anisotropy: 0.15, // Minimal brushed directional highlight (same as metal layer)
+    requiresPhysical: true, // Use PhysicalMaterial (needed for some properties)
+    anisotropy: 0.0, // No anisotropy - no directional highlights
     anisotropyRotation: 0.0, // Brush direction (radians)
     renderOrder: 2, // Render on top of metal background (WhiteMetal_FullBleed/Shrunk)
   },
   METAL: {
     metalness: 1.0,
-    roughness: 0.95, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
+    roughness: 1.0, // Maximum roughness - completely matte, no shininess
     envBase: 0.0, // No reflections on metal
-    requiresPhysical: true, // Use PhysicalMaterial for anisotropy support
-    anisotropy: 0.15, // Minimal brushed directional highlight (very reduced for less shininess)
+    requiresPhysical: true, // Use PhysicalMaterial (needed for some properties)
+    anisotropy: 0.0, // No anisotropy - no directional highlights
     anisotropyRotation: 0.0, // Brush direction (radians)
     renderOrder: 1, // Render below artwork (PRINT layer)
   },
@@ -37,39 +38,33 @@ export const METAL_BOX_PRESET = {
   },
 };
 
-// Metal finish presets
-export const METAL_FINISH_PRESETS = {
-  polished: { roughness: 0.05 }, // Very smooth, highly reflective, mirror-like
-  brushed: { roughness: 0.95 }, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-};
+// Metal finish presets - Use centralized presets from MetalMaterial
+// Re-export for compatibility, but all values come from MetalMaterial.METAL_FINISH_PRESETS
+export { METAL_FINISH_PRESETS };
 
 /**
  * Classifies a material for metal box prints
  */
-export const classifyMaterial = ({ meshName, material, materialType }) => {
-  const matName = (material?.name || "").toLowerCase();
-  const meshNameLower = (meshName || "").toLowerCase();
+export const classifyMaterial = ({ meshName, material }) => {
+  const name = (meshName || "").toLowerCase();
   
-  // METAL: Check metalness OR metalnessMap OR metal-related names
-  if (
-    materialType === "METAL_BOX" ||
-    materialType === "METAL" ||
-    (material?.metalness !== undefined && material.metalness > 0.4) ||
-    material?.metalnessMap ||
-    meshNameLower.includes("metal") ||
-    matName.includes("metal") ||
-    meshNameLower.includes("box") ||
-    matName.includes("box") ||
-    meshNameLower.includes("frame") ||
-    matName.includes("frame")
-  ) {
-    return "METAL";
+  // ✅ PRINT FIRST (artwork always priority)
+  // Never classify by materialType or metalness - only by actual texture presence
+  if (material?.map) {
+    return "PRINT";
   }
   
-  // PRINT: Has color map
-  const hasArtworkMap = !!material?.map;
-  if (hasArtworkMap) {
-    return "PRINT";
+  // METAL meshes by name only (never by materialType flag or metalness value)
+  // This prevents circular logic where materialType forces classification
+  if (
+    name.includes("metal") ||
+    name.includes("frame") ||
+    name.includes("silver") ||
+    name.includes("aluminium") ||
+    name.includes("aluminum") ||
+    name.includes("box")
+  ) {
+    return "METAL";
   }
   
   return "DEFAULT";
@@ -87,35 +82,40 @@ export const applyMetalBoxPreset = (material, preset, renderer, role, options = 
   if (role === "PRINT") {
     const { metalColor, metalFinish = "brushed" } = options;
     
-    // For metal silver, apply proper metal PBR properties
+    // For metal silver, apply proper PBR properties for artwork (non-metallic for vibrancy)
     if (metalColor === "brushed_silver") {
-      // Apply proper metal PBR for silver artwork layer - full metalness for complete blending
-      updatedMat.metalness = 1.0; // Full metalness for complete metallic blending with metal layer
+      // CRITICAL FIX: Use low metalness (0.0) for artwork to make it vibrant, not dull
+      // metalness = 1.0 makes artwork look dull and metallic - we want printed material appearance
+      updatedMat.metalness = 0.0; // Non-metallic for vibrant colors
       
-      // Set roughness based on metal finish - very little reflectiveness for metal-like appearance
-      if (metalFinish === "polished") {
-        updatedMat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
-        updatedMat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
-      } else {
-        // brushed finish - extremely low shininess very matte brushed metal
-        updatedMat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-        updatedMat.envMapIntensity = 0.0; // No reflections on metal
-      }
+      // Use moderate roughness for better color vibrancy (not too matte)
+      // roughness = 1.0 is too matte and makes artwork look dull
+      const finishPreset = METAL_FINISH_PRESETS[metalFinish] || METAL_FINISH_PRESETS.brushed;
+      updatedMat.roughness = 0.4; // Moderate roughness - less matte, more vibrant (override preset)
+      updatedMat.envMapIntensity = finishPreset.envMapIntensityArtwork;
       
-      // Apply anisotropy for brushed metal directional highlight (same as metal layer)
-      if (updatedMat.isMeshPhysicalMaterial && metalFinish === "brushed") {
-        if (updatedMat.anisotropy !== undefined) updatedMat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
+      // Apply anisotropy based on finish preset
+      if (updatedMat.isMeshPhysicalMaterial) {
+        if (updatedMat.anisotropy !== undefined) updatedMat.anisotropy = finishPreset.anisotropy;
         if (updatedMat.anisotropyRotation !== undefined) updatedMat.anisotropyRotation = 0.0; // Brush direction
       }
       
       // Keep envMap as null to use scene.environment
       updatedMat.envMap = null;
     } else {
-      // For non-silver metals (white, etc.), use minimal metal PBR
-      // Add very minimal metal PBR properties - just a tiny hint of metal
-      updatedMat.metalness = 0.1; // Very small amount of metalness
-      updatedMat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
-      updatedMat.envMapIntensity = 0.05; // Very minimal environment reflections
+      // For non-silver metals (white, etc.), use centralized preset
+      const finishPreset = METAL_FINISH_PRESETS[metalFinish] || METAL_FINISH_PRESETS.brushed;
+      updatedMat.metalness = finishPreset.metalnessNonSilver;
+      updatedMat.roughness = finishPreset.roughnessNonSilver;
+      updatedMat.envMapIntensity = finishPreset.envMapIntensityNonSilver;
+      
+      // Disable all specular and clearcoat properties
+      if (updatedMat.specularIntensity !== undefined) updatedMat.specularIntensity = finishPreset.specularIntensity || 0.0;
+      if (updatedMat.clearcoat !== undefined) updatedMat.clearcoat = finishPreset.clearcoat || 0.0;
+      if (updatedMat.clearcoatRoughness !== undefined) updatedMat.clearcoatRoughness = finishPreset.clearcoatRoughness || 1.0;
+      if (updatedMat.sheen !== undefined) updatedMat.sheen = finishPreset.sheen || 0.0;
+      if (updatedMat.sheenRoughness !== undefined) updatedMat.sheenRoughness = finishPreset.sheenRoughness || 1.0;
+      
       // Keep envMap as null to use scene.environment
     }
     
@@ -180,32 +180,58 @@ export const applyMetalBoxPreset = (material, preset, renderer, role, options = 
       updatedMat.map.needsUpdate = true;
     }
     
-    // Apply color tint to blend with metal layer
+    // Apply color tint to blend with metal layer - use centralized preset colors
     if (updatedMat.color) {
+      const finishPreset = METAL_FINISH_PRESETS[metalFinish] || METAL_FINISH_PRESETS.brushed;
       if (metalColor === "brushed_silver") {
-        // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
-        // Metal color is RGB(150, 150, 160) = normalized (0.588, 0.588, 0.627)
-        // Use very bright version for artwork to maintain visibility while keeping metal tint
-        updatedMat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
+        // Apply bright silver color from centralized preset
+        updatedMat.color.setRGB(
+          finishPreset.colorSilver.r,
+          finishPreset.colorSilver.g,
+          finishPreset.colorSilver.b
+        );
       } else {
-        // For other metals, use neutral brightness
-        updatedMat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
+        // For other metals, use bright white from centralized preset
+        updatedMat.color.setRGB(
+          finishPreset.colorWhite.r,
+          finishPreset.colorWhite.g,
+          finishPreset.colorWhite.b
+        );
       }
     }
-    // Remove emissive to prevent washing out the texture
+    // Handle emissive based on artworkBrightness option
+    // If artworkBrightness > 0 and texture exists, use emissiveMap for brightness boost
+    // Otherwise, disable emissive
+    const { artworkBrightness = 0 } = options;
     if (updatedMat.emissive !== undefined) {
-      updatedMat.emissive.setRGB(0, 0, 0);
-      updatedMat.emissiveIntensity = 0.0;
+      if (artworkBrightness > 0 && updatedMat.map) {
+        // Enable texture-colored emissive for brightness boost
+        updatedMat.emissive.setRGB(1, 1, 1);
+        updatedMat.emissiveMap = updatedMat.map;
+        updatedMat.emissiveIntensity = artworkBrightness;
+        if (updatedMat.map) updatedMat.map.colorSpace = THREE.SRGBColorSpace;
+        if (updatedMat.emissiveMap) updatedMat.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+      } else {
+        // Disable emissive
+        updatedMat.emissive.setRGB(0, 0, 0);
+        updatedMat.emissiveIntensity = 0.0;
+        updatedMat.emissiveMap = null;
+      }
     }
     
     updatedMat.needsUpdate = true;
   }
   
-  // For METAL role, ensure white metal is super white
+  // For METAL role, ensure white metal is super white - use centralized preset
   if (role === "METAL") {
-    const { metalColor } = options;
+    const { metalColor, metalFinish = "brushed" } = options;
     if (metalColor === "white" && updatedMat.color) {
-      updatedMat.color.setRGB(2.5, 2.5, 2.5); // Super white for white metal layer
+      const finishPreset = METAL_FINISH_PRESETS[metalFinish] || METAL_FINISH_PRESETS.brushed;
+      updatedMat.color.setRGB(
+        finishPreset.colorWhiteMetal.r,
+        finishPreset.colorWhiteMetal.g,
+        finishPreset.colorWhiteMetal.b
+      );
       updatedMat.needsUpdate = true;
     }
   }
@@ -273,13 +299,11 @@ const applyMetalBoxBackSettings = (mat) => {
 
 /**
  * Helper to detect artwork layer meshes (Artwork_FullBleed, Artwork_Shrunk)
- * Artwork layers should maintain their own properties and not be updated by material update functions
  */
-const isArtworkLayer = (obj, mat) => {
+export const isArtworkLayer = (obj, mat) => {
   if (!obj || !obj.name) return false;
   const objName = obj.name;
   const objNameLower = objName.toLowerCase();
-  // Check for artwork mesh names
   return (
     objName === "Artwork_FullBleed" ||
     objName === "Artwork_Shrunk" ||
@@ -289,66 +313,50 @@ const isArtworkLayer = (obj, mat) => {
 };
 
 /**
+ * Helper to detect metal mesh by name
+ */
+const isMetalMesh = (obj) => {
+  if (!obj || !obj.name) return false;
+  const meshName = (obj.name || "").toLowerCase();
+  return (
+    meshName.includes("metal") || 
+    meshName.includes("silver") || 
+    meshName.includes("frame") ||
+    meshName.includes("aluminium") ||
+    meshName.includes("aluminum") ||
+    meshName.includes("box")
+  );
+};
+
+/**
+ * DEPRECATED: Use applyMetalState() instead
  * Updates metal box materials when environment map changes
- * SKIPS artwork layers to preserve their brightness and properties
+ * This function now only sets envMap = null, all PBR properties come from applyMetalState()
  */
 export const updateMetalBoxMaterials = (model, envMap, showReflections, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
   
+  // Only set environment map - all PBR properties come from applyMetalState()
   model.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
     
-    // Metal box back: force bright + matte + no reflections (like Mirror_Back)
     if (isMetalBoxBackLayer(obj)) {
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       mats.forEach((mat) => {
         applyMetalBoxBackSettings(mat);
       });
-      return; // IMPORTANT: don't let generic env logic touch it
+      return;
     }
-    
-    // Detect if this is a white metal mesh
-    const objNameLower = (obj.name || "").toLowerCase();
-    const isWhiteMetal = (objNameLower.includes("white") && objNameLower.includes("metal")) ||
-                        objNameLower.includes("whitemetal");
     
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
-      // SKIP artwork layers - they maintain their own brightness and properties
       if (isArtworkLayer(obj, mat)) {
-        return; // Skip this material, preserve its properties
+        return; // Skip artwork layers
       }
       
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        // ONLY set environment map - PBR properties come from applyMetalState()
         mat.envMap = null; // Use scene.environment
-        const baseIntensity = baseEnvMapIntensities.get(mat);
-        if (baseIntensity !== undefined) {
-          // Apply very little reflectiveness - subtle reflections
-          mat.envMapIntensity = 0.15; // Very little reflectiveness - slightly increased for subtle reflections
-        } else {
-          // Default very little reflectiveness if no base intensity stored
-          mat.envMapIntensity = 0.15;
-        }
-        
-        // Apply extremely low shininess very matte brushed metal appearance - use correct roughness range
-        if (mat.roughness !== undefined) {
-          mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-        }
-        
-        // Apply minimal anisotropy for brushed metal directional highlight (requires PhysicalMaterial)
-        if (mat.isMeshPhysicalMaterial) {
-          if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
-          if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-        }
-        
-        // Set envMapIntensity to zero - no reflections on metal
-        mat.envMapIntensity = 0.0; // No reflections on metal
-        
-        // CRITICAL: Re-apply super white for white metal layers to prevent it from being reset
-        if (isWhiteMetal && mat.metalness !== undefined && mat.metalness > 0.4) {
-          mat.color.setRGB(2.5, 2.5, 2.5); // Super white for white metal
-        }
-        
         mat.needsUpdate = true;
       }
     });
@@ -356,138 +364,30 @@ export const updateMetalBoxMaterials = (model, envMap, showReflections, reflecti
 };
 
 /**
+ * DEPRECATED: Use applyMetalState() instead
  * Updates metal box materials when reflection intensity changes
- * SKIPS artwork layers to preserve their brightness and properties
+ * This function does nothing - all properties come from applyMetalState()
  */
 export const updateMetalBoxReflectionIntensity = (model, reflectionIntensity, baseEnvMapIntensities) => {
-  if (!model) return;
-  
-  model.traverse((obj) => {
-    if (!obj.isMesh || !obj.material) return;
-    
-    // Metal box back: keep bright + matte + no reflections (like Mirror_Back)
-    if (isMetalBoxBackLayer(obj)) {
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      mats.forEach((mat) => {
-        applyMetalBoxBackSettings(mat);
-      });
-      return; // IMPORTANT: don't let generic env logic touch it
-    }
-    
-    // Detect if this is a white metal mesh
-    const objNameLower = (obj.name || "").toLowerCase();
-    const isWhiteMetal = (objNameLower.includes("white") && objNameLower.includes("metal")) ||
-                        objNameLower.includes("whitemetal");
-    
-    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-    mats.forEach((mat) => {
-      // SKIP artwork layers - they maintain their own brightness and properties
-      if (isArtworkLayer(obj, mat)) {
-        return; // Skip this material, preserve its properties
-      }
-      
-      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-        const baseIntensity = baseEnvMapIntensities.get(mat);
-        if (baseIntensity !== undefined) {
-          // Apply very little reflectiveness - subtle reflections
-          mat.envMapIntensity = 0.15; // Very little reflectiveness - slightly increased for subtle reflections
-        } else {
-          // Default very little reflectiveness if no base intensity stored
-          mat.envMapIntensity = 0.15;
-        }
-        
-        // Apply extremely low shininess very matte brushed metal appearance - use correct roughness range
-        if (mat.roughness !== undefined) {
-          mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-        }
-        
-        // Apply minimal anisotropy for brushed metal directional highlight (requires PhysicalMaterial)
-        if (mat.isMeshPhysicalMaterial) {
-          if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
-          if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-        }
-        
-        // Set envMapIntensity to zero - no reflections on metal
-        mat.envMapIntensity = 0.0; // No reflections on metal
-        
-        // CRITICAL: Re-apply super white for white metal layers to prevent it from being reset
-        if (isWhiteMetal && mat.metalness !== undefined && mat.metalness > 0.4) {
-          mat.color.setRGB(2.5, 2.5, 2.5); // Super white for white metal
-        }
-        
-        mat.needsUpdate = true;
-      }
-    });
-  });
+  // DO NOTHING - All properties are handled by applyMetalState()
+  return;
 };
 
 /**
  * Updates metal box materials when metal finish changes
  */
+/**
+ * DEPRECATED: Use applyMetalState() from MetalMaterial instead
+ * Updates metal box materials when metal finish changes
+ * This function now just calls applyMetalState() from MetalMaterial
+ */
 export const updateMetalBoxFinish = (model, metalFinish, metalColor = null) => {
-  if (!model) return;
-  
-  const METAL_FINISH_PRESETS = {
-    polished: { 
-      roughness: 0.05, // Very smooth, highly reflective, mirror-like (background metal)
-      roughnessArtwork: 0.05, // Same for artwork layer - match metal layer
-      envMapIntensityArtwork: 0.1, // Very minimal environment reflections for polished artwork
-      envMapIntensityMetal: 0.1 // Very minimal reflections for polished metal layer
-    },
-    brushed: { 
-      roughness: 0.95, // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR) (background metal)
-      roughnessArtwork: 0.95, // Extremely low shininess - very matte brushed metal for artwork
-      envMapIntensityArtwork: 0.0, // No reflections on artwork
-      envMapIntensityMetal: 0.0 // No reflections on metal layer
-    },
-  };
-  
-  const finishPreset = METAL_FINISH_PRESETS[metalFinish];
-  if (!finishPreset) return;
-  
-  model.traverse((obj) => {
-    if (!obj.isMesh || !obj.material) return;
-    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-    mats.forEach((mat) => {
-      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-        // Check if this is an artwork layer for silver (has texture map and full metalness)
-        const isArtworkLayerForSilver = mat.map && 
-                                       mat.metalness !== undefined && 
-                                       mat.metalness >= 0.9 && 
-                                       metalColor === "brushed_silver";
-        
-        if (isArtworkLayerForSilver) {
-          // Update artwork layer PBR properties for metal silver - match metal layer exactly
-          mat.roughness = finishPreset.roughnessArtwork;
-          mat.envMapIntensity = finishPreset.envMapIntensityArtwork;
-          // Apply anisotropy for brushed metal directional highlight (same as metal layer)
-          if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
-            if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
-            if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-          }
-          mat.needsUpdate = true;
-        } else if (mat.metalness !== undefined && mat.metalness > 0.4) {
-          // Update other metal materials (background metal layers)
-          mat.roughness = finishPreset.roughness;
-          // Apply proper envMapIntensity to metal layer
-          if (finishPreset.envMapIntensityMetal !== undefined) {
-            mat.envMapIntensity = finishPreset.envMapIntensityMetal;
-          }
-          // Apply minimal anisotropy for brushed metal directional highlight
-          if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
-            if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (very reduced for less shininess)
-            if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-          }
-          // Apply prominent sheen for metallic appearance
-          if (mat.isMeshPhysicalMaterial) {
-            if (mat.sheen !== undefined) mat.sheen = 0.4; // Prominent sheen
-            if (mat.sheenRoughness !== undefined) mat.sheenRoughness = 0.3; // Concentrated sheen
-            if (mat.sheenColor !== undefined) mat.sheenColor.set(0xffffff); // White sheen
-          }
-          mat.needsUpdate = true;
-        }
-      }
-    });
+  // Forward to the single source of truth function from MetalMaterial
+  applyMetalState(model, null, {
+    metalFinish,
+    metalColor,
+    showReflections: false,
+    reflectionIntensity: 1.0
   });
 };
 
@@ -511,19 +411,30 @@ export const updateMetalBoxColor = (model, metalColor) => {
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
         if (mat.metalness !== undefined && mat.metalness > 0.4) {
-          // For white metal, use super white (HDR values above 1.0) to make it clearly white, not silver-like
+          // For white metal, use super white from centralized preset
           if (metalColor === "white") {
-            mat.color.setRGB(2.5, 2.5, 2.5); // Super white - much brighter than silver
+            // Use brushed finish for white metal (default)
+            const finishPreset = METAL_FINISH_PRESETS.brushed;
+            mat.color.setRGB(
+              finishPreset.colorWhiteMetal.r,
+              finishPreset.colorWhiteMetal.g,
+              finishPreset.colorWhiteMetal.b
+            );
           } else {
             mat.color.copy(color);
           }
           mat.needsUpdate = true;
         }
         // Also update PRINT role materials (artwork layers with texture maps)
-        // For silver artwork layers, apply brighter silver color for visibility
+        // For silver artwork layers, apply bright color from centralized preset
         if (mat.map && metalColor === "brushed_silver") {
-          // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
-          mat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
+          // Use brushed finish for artwork (default)
+          const finishPreset = METAL_FINISH_PRESETS.brushed;
+          mat.color.setRGB(
+            finishPreset.colorSilver.r,
+            finishPreset.colorSilver.g,
+            finishPreset.colorSilver.b
+          );
           mat.needsUpdate = true;
         }
       }

@@ -34,10 +34,12 @@ export function useMaterialUpdates({
       );
     } else if (materialModule.updateReflectionIntensity) {
       // Update reflection intensity for other material types
+      const renderer = sceneManagerRef.current?.getRenderer();
       materialModule.updateReflectionIntensity(
         model,
         lighting.reflectionIntensity,
-        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+        renderer
       );
     }
     
@@ -50,7 +52,8 @@ export function useMaterialUpdates({
     }
   }, [lighting.reflectionIntensity, materialType.materialModuleRef, modelManagerRef, materialProcessorRef, sceneManagerRef, environmentManagerRef]);
 
-  // Update metal finish - handled by material module (only for METAL and METAL_BOX)
+  // Update metal finish and color - handled by material module (only for METAL and METAL_BOX)
+  // SINGLE SOURCE OF TRUTH: applyMetalState handles both finish and color changes
   useEffect(() => {
     const model = modelManagerRef.current?.getModel();
     if (!model || !materialType.materialModuleRef.current) return;
@@ -61,27 +64,27 @@ export function useMaterialUpdates({
     }
 
     const materialModule = materialType.materialModuleRef.current;
-    if (materialModule.updateFinish) {
-      // Pass metalColor to updateFinish so it can update artwork layer PBR for silver
-      materialModule.updateFinish(model, lighting.metalFinish, materialType.metalColor);
+    if (materialModule.applyMetalState) {
+      // Use single source of truth function - applyMetalState
+      // This handles finish, color, AND reflectionIntensity changes (consolidated from separate effects)
+      const renderer = sceneManagerRef.current?.getRenderer?.();
+      materialModule.applyMetalState(model, renderer, {
+        metalFinish: lighting.metalFinish,
+        metalColor: materialType.metalColor ?? "brushed_silver", // Normalize to prevent null re-runs
+        showReflections: lighting.showReflections,
+        reflectionIntensity: lighting.reflectionIntensity,
+      });
     }
-  }, [lighting.metalFinish, materialType, modelManagerRef]);
-
-  // Update metal color - handled by material module (only for METAL and METAL_BOX)
-  useEffect(() => {
-    const model = modelManagerRef.current?.getModel();
-    if (!model || !materialType.materialModuleRef.current) return;
-
-    const activeType = materialType.activeMaterialTypeRef.current;
-    if (activeType !== "METAL" && activeType !== "METAL_BOX") {
-      return;
-    }
-
-    const materialModule = materialType.materialModuleRef.current;
-    if (materialModule.updateColor) {
-      materialModule.updateColor(model, materialType.metalColor);
-    }
-  }, [materialType.metalColor, materialType, modelManagerRef]);
+  }, [
+    materialType.activeMaterialType, // ✅ Correct dependency - source of truth
+    materialType.metalColor,
+    lighting.metalFinish,
+    lighting.showReflections,
+    lighting.reflectionIntensity,
+    materialType.materialModuleRef,
+    modelManagerRef,
+    sceneManagerRef,
+  ]);
 
   // Reload HDRI when switching to/from MIRROR material type
   useEffect(() => {
@@ -161,99 +164,36 @@ export function useMaterialUpdates({
 
     // Update environment map for materials
     const envMap = environmentManagerRef.current?.getEnvironmentMap();
-    if (materialModule.updateMaterials && envMap) {
+    const activeType = materialType.activeMaterialTypeRef.current;
+    const rendererForUpdate = sceneManagerRef.current?.getRenderer();
+    
+    // For MIRROR: always call applyMirrorState (single source of truth)
+    // Pass envMap explicitly so mirror materials can reflect the HDRI
+    if (activeType === "MIRROR" && materialModule.applyMirrorState && rendererForUpdate) {
+      const envMap = environmentManagerRef.current?.getEnvironmentMap();
+      materialModule.applyMirrorState(model, rendererForUpdate, {
+        reflectionIntensity: lighting.reflectionIntensity,
+        showReflections: lighting.showReflections,
+        baseEnvMapIntensities: materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+        envMap: envMap, // Explicitly pass the HDRI envMap
+      });
+      return;
+    }
+    
+    if (materialModule.updateMaterials && envMap && rendererForUpdate) {
       materialModule.updateMaterials(
         model,
         envMap,
         lighting.showReflections,
         lighting.reflectionIntensity,
-        materialProcessorRef.current.getBaseEnvMapIntensities()
+        materialProcessorRef.current.getBaseEnvMapIntensities(),
+        rendererForUpdate
       );
     }
     
-    // CRITICAL: Re-apply brightness to artwork layers, metal PBR for silver, and super white to white metal after material updates
-    // This ensures artwork brightness, metal PBR for silver, and white metal super white persist even if materials were updated
-    if (activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX") {
-      const metalColor = materialType.metalColor;
-      const metalFinish = lighting.metalFinish;
-      const isMetalBox = activeMaterialType === "METAL_BOX";
-      
-      model.traverse((obj) => {
-        if (!obj.isMesh || !obj.material) return;
-        const objName = obj.name || "";
-        const objNameLower = objName.toLowerCase();
-        
-        // Re-apply artwork brightness and metal PBR for silver
-        const isArtwork = objName === "Artwork_FullBleed" || 
-                         objName === "Artwork_Shrunk" ||
-                         (objNameLower.includes("artwork") && 
-                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed") || objNameLower.includes("shrunk")));
-        
-        if (isArtwork) {
-          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-          mats.forEach((mat) => {
-            if (mat.color) {
-              // Apply brighter silver color for artwork visibility while maintaining metal blending
-              if (metalColor === "brushed_silver") {
-                mat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
-              } else {
-                mat.color.setRGB(0.5, 0.5, 0.5); // Re-apply moderate brightness for other metals
-              }
-            }
-            
-            // Re-apply metal PBR for artwork layer (both silver and white metal)
-            if ((metalColor === "brushed_silver" || isMetalBox) && (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) {
-              mat.metalness = 1.0; // Full metalness for complete metallic blending with metal layer
-              
-              // Set roughness and envMapIntensity based on metal finish and material type
-              if (metalFinish === "polished") {
-                mat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
-                mat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
-              } else {
-                // brushed finish - extremely low shininess very matte brushed metal
-                mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-                mat.envMapIntensity = 0.0; // No reflections on metal
-              }
-              
-              // Apply anisotropy for brushed metal directional highlight (same as metal layer)
-              if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
-                if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
-                if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-              }
-              
-              mat.envMap = null; // Use scene.environment
-            }
-            
-            // Ensure transparency settings for alpha areas to show metal background
-            // Use alphaToCoverage to reduce white halo around text edges
-            mat.transparent = true;
-            mat.opacity = 1.0;
-            mat.alphaTest = 0.08; // Higher threshold to remove white fringe pixels (0.05-0.15 range)
-            mat.alphaToCoverage = true; // Important: reduces fringes while keeping edges smooth (needs MSAA)
-            mat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
-            mat.depthTest = true; // Enable depth testing for proper layering
-            
-            mat.needsUpdate = true;
-          });
-        }
-        
-        // Re-apply super white for white metal layers
-        const isWhiteMetal = (objNameLower.includes("white") && objNameLower.includes("metal")) ||
-                            objNameLower.includes("whitemetal");
-        
-        if (isWhiteMetal && metalColor === "white") {
-          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-          mats.forEach((mat) => {
-            if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-              if (mat.metalness !== undefined && mat.metalness > 0.4 && mat.color) {
-                mat.color.setRGB(2.5, 2.5, 2.5); // Re-apply super white for white metal
-                mat.needsUpdate = true;
-              }
-            }
-          });
-        }
-      });
-    }
+    // CRITICAL: Do NOT re-apply metal state here after updateMaterials
+    // This causes timing issues and "original captured after already modified" bugs
+    // Metal state is handled by the consolidated reactive effect above (handles all UI changes)
   }, [materialType.selectedMaterialType, materialType.materialTypeOverride, lighting, modelManagerRef, sceneManagerRef, environmentManagerRef, materialProcessorRef, materialType]);
 
   // Toggle environment map - handled by material module (skip for acrylics)
@@ -263,7 +203,7 @@ export function useMaterialUpdates({
     const model = modelManagerRef.current?.getModel();
     if (!scene || !envMap || !materialType.materialModuleRef.current) return;
 
-    // Update environment manager
+    // Update environment manager|
     environmentManagerRef.current.setEnabled(lighting.showReflections);
 
     // Update materials using the material module's own update function
@@ -274,12 +214,14 @@ export function useMaterialUpdates({
     if (activeType === "ACRYLIC") return;
     
     if (materialModule.updateMaterials && model) {
+      const renderer = sceneManagerRef.current?.getRenderer();
       materialModule.updateMaterials(
         model,
         lighting.showReflections ? envMap : null,
         lighting.showReflections,
         lighting.reflectionIntensity,
-        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+        materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+        renderer
       );
     }
   }, [lighting.showReflections, lighting.reflectionIntensity, materialType.materialModuleRef, sceneManagerRef, environmentManagerRef, modelManagerRef, materialProcessorRef]);

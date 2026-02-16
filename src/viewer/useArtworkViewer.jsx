@@ -19,12 +19,14 @@ import {
   useMaterialUpdates,
 } from "../hooks/index.jsx";
 import { useTextureOperations } from "../hooks/useTextureOperations.jsx";
-import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG, MODEL_PATHS } from "../config/appConfig.jsx";
+import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG, MODEL_PATHS, getModelPath, getHDRIPath, getMaterialTypeInfo, ORIENTATION_TYPES, getDefaultReflectionIntensity } from "../config/appConfig.jsx";
 import { TextureManager } from "../managers/TextureManager.jsx";
 import { findArtworkTextureLayer, findTextureLayer, getTextureLayersForMode } from "../utils/textureUtils.jsx";
 import { getArtworkMeshForMode, MODE_TYPES } from "../utils/meshUtils.jsx";
 import { exportModelToUSDZ } from "../utils/usdzUtils.jsx";
 import { applyTextureTransform, exportTextureFromCanvas } from "../utils/textureTransformUtils.jsx";
+import { snapshotOriginalMetal } from "../materials/MetalMaterial.jsx";
+import { applyMirrorState } from "../materials/MirrorMaterial.jsx";
 
 /**
  * Core hook for ArtworkViewer
@@ -67,7 +69,10 @@ export function useArtworkViewer({
   const materialType = useMaterialType();
   const textureLayersHook = useTextureLayers();
   const meshVisibilityHook = useMeshVisibility();
-  const lighting = useLighting(lightingManagerRef);
+  // Initialize reflectionIntensity based on material type
+  const initialMaterialType = materialTypeProp || materialType.activeMaterialType || MATERIAL_CONFIG.DEFAULT_TYPE;
+  const initialReflectionIntensity = getDefaultReflectionIntensity(initialMaterialType);
+  const lighting = useLighting(lightingManagerRef, initialReflectionIntensity);
 
   // ============================
   // MIRROR REFLECTORS (planar)
@@ -110,10 +115,11 @@ export function useArtworkViewer({
 
       if (!isMirrorPlane) return;
 
-      // Clone geometry and bake the LOCAL transform (including scale) into it.
-      // This avoids non-uniform object scale on the Reflector, which distorts reflections.
+      // Clone geometry and bake ONLY scale to avoid reflection stretching
+      // Position and rotation will be copied to reflector transform
       const bakedGeo = obj.geometry.clone();
-      bakedGeo.applyMatrix4(obj.matrix);
+      const scaleMatrix = new THREE.Matrix4().makeScale(obj.scale.x, obj.scale.y, obj.scale.z);
+      bakedGeo.applyMatrix4(scaleMatrix);
 
       const reflector = new Reflector(bakedGeo, {
         clipBias: 0.003,
@@ -128,18 +134,19 @@ export function useArtworkViewer({
         [MIRROR_REFLECTOR_TAG]: true,
       };
 
-      // Reflector now lives in the parent's local space with baked geometry;
-      // keep its transform identity so reflections are not stretched.
-      reflector.position.set(0, 0, 0);
-      reflector.quaternion.set(0, 0, 0, 1);
+      // Copy translation + rotation (keep scale = 1 because scale baked into geometry)
+      reflector.position.copy(obj.position);
+      reflector.quaternion.copy(obj.quaternion);
       reflector.scale.set(1, 1, 1);
 
       // Render on top of the original mirror surface
       reflector.renderOrder = (obj.renderOrder || 0) + 1;
 
-      // Hide original mirror mesh to avoid z-fighting
-      obj.visible = false;
+      // MIRROR: Option A (PBR mirror) — keep original mirror mesh visible
+      // Do NOT hide the original mesh - we're using PBR materials, not Reflector
+      // obj.visible = false; // REMOVED - using PBR mirror instead
 
+      // Add under same parent
       if (obj.parent) {
         obj.parent.add(reflector);
       }
@@ -499,14 +506,37 @@ export function useArtworkViewer({
     );
 
     // Load HDRI
-    if (hdriPath) {
+    // Always fallback to resolved material type if hdriPath is not provided
+    const effectiveType =
+      materialTypeProp ||
+      materialType.activeMaterialTypeRef.current ||
+      materialType.activeMaterialType ||
+      MATERIAL_CONFIG.DEFAULT_TYPE;
+    
+    const hdriToLoad = hdriPath || getHDRIPath(effectiveType);
+    
+    console.log("[HDRI INIT]", {
+      hdriProp: hdriPath,
+      effectiveType,
+      hdriToLoad,
+    });
+    
+    if (hdriToLoad) {
       environmentManager.loadHDRI(
-        hdriPath,
+        hdriToLoad,
         (newEnvMap) => {
           const model = modelManager.getModel();
           if (model && materialType.materialModuleRef.current) {
             const activeType = materialType.activeMaterialTypeRef.current;
             const materialModule = materialType.materialModuleRef.current;
+            const renderer = sceneManagerRef.current?.getRenderer();
+
+            // For MIRROR: skip INIT load if setup() will handle it (prevents double-load)
+            // setup() will load the correct mirror HDRI when material type changes
+            if (activeType === "MIRROR") {
+              console.log("[HDRI INIT] Skipping MIRROR HDRI load - setup() will handle it");
+              return;
+            }
 
             // For acrylics: apply matte to artwork, glossy to glass
             if (activeType === "ACRYLIC" && materialModule.applyArtworkMatteGlassGlossy) {
@@ -521,13 +551,14 @@ export function useArtworkViewer({
                 newEnvMap,
                 lighting.reflectionIntensity
               );
-            } else if (materialModule.updateMaterials) {
+            } else if (materialModule.updateMaterials && renderer) {
               materialModule.updateMaterials(
                 model,
                 newEnvMap,
                 lighting.showReflections,
                 lighting.reflectionIntensity,
-                materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
+                materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+                renderer
               );
             }
           }
@@ -537,6 +568,8 @@ export function useArtworkViewer({
           if (onError) onError(err);
         }
       );
+    } else {
+      console.warn("[HDRI] No HDRI resolved", { hdriPath, effectiveType });
     }
 
     // Load model
@@ -566,6 +599,9 @@ export function useArtworkViewer({
           lightingManagerRef.current.applyMaterialDefaults(activeMaterialType);
           const newLighting = lightingManagerRef.current.getLighting();
           lighting.setLighting(newLighting);
+          // Set default reflectionIntensity based on material type
+          const defaultReflectionIntensity = getDefaultReflectionIntensity(activeMaterialType);
+          lighting.setReflectionIntensity(defaultReflectionIntensity);
         }
 
         // Load model
@@ -650,10 +686,16 @@ export function useArtworkViewer({
               );
             }
 
-            // For mirrors: upgrade mirror planes (Mirror_FullBleed / Mirror_Shrunk) to real planar reflectors
+            // MIRROR: Option A (PBR mirror) — do NOT replace meshes with Reflector
+            // Ensure original mirror meshes are visible (in case old reflector logic hid them)
             if (activeMaterialType === "MIRROR") {
-              createMirrorReflectors(model, { textureSize: 1024 });
-              syncMirrorReflectorVisibility(model, currentMode);
+              model.traverse((o) => {
+                if (!o.isMesh) return;
+                const n = (o.name || "").toLowerCase();
+                if (n === "mirror_fullbleed" || n === "mirror_shrunk") {
+                  o.visible = true;
+                }
+              });
             }
 
             // Apply initial mode
@@ -672,14 +714,28 @@ export function useArtworkViewer({
                   lighting.reflectionIntensity
                 );
               }
-            } else if (envMap && materialModule.updateMaterials) {
-              materialModule.updateMaterials(
-                model,
-                envMap,
-                lighting.showReflections,
-                lighting.reflectionIntensity,
-                materialProcessor.getBaseEnvMapIntensities()
-              );
+            } else {
+              const renderer = sceneManagerRef.current?.getRenderer();
+              
+              // For MIRROR: always call applyMirrorState (single source of truth)
+              // Pass envMap explicitly so mirror materials can reflect the HDRI
+              if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState && renderer) {
+                materialModule.applyMirrorState(model, renderer, {
+                  reflectionIntensity: lighting.reflectionIntensity,
+                  showReflections: lighting.showReflections,
+                  baseEnvMapIntensities: materialProcessor.getBaseEnvMapIntensities(),
+                  envMap: envMap, // Explicitly pass the HDRI envMap
+                });
+              } else if (envMap && materialModule.updateMaterials && renderer) {
+                materialModule.updateMaterials(
+                  model,
+                  envMap,
+                  lighting.showReflections,
+                  lighting.reflectionIntensity,
+                  materialProcessor.getBaseEnvMapIntensities(),
+                  renderer
+                );
+              }
             }
 
             setLoading(false);
@@ -712,7 +768,7 @@ export function useArtworkViewer({
       materialProcessorRef.current?.dispose();
       lightingManagerRef.current?.dispose();
     };
-  }, [modelPath, hdriPath]); // Only re-run if paths change
+  }, [modelPath, hdriPath, materialTypeProp]); // Re-run if paths or material type change
 
   // Material updates
   useMaterialUpdates({
@@ -797,11 +853,9 @@ export function useArtworkViewer({
     // This will handle all background meshes (Wood_FullBleed, Wood_Shrunk, etc.)
     meshVisibilityManagerRef.current.applyVisibilityRelationships();
 
-    // Keep mirror reflectors in sync with mode when in MIRROR material type
-    if (materialType.activeMaterialTypeRef.current === "MIRROR") {
-      const model = modelManagerRef.current?.getModel();
-      syncMirrorReflectorVisibility(model, newMode);
-    }
+    // MIRROR: Option A (PBR mirror) — no reflector sync needed
+    // Mirror meshes are controlled by mode visibility, not reflectors
+    // (Mode visibility is handled by meshVisibilityManager)
 
     setCurrentMode(newMode);
     if (onModeChange) onModeChange(newMode);
@@ -938,214 +992,24 @@ export function useArtworkViewer({
               mat.map.needsUpdate = true;
             }
             
-            // For metals: Copy brushed metal finish from corresponding metal background mesh
-            if (isMetal && (isFullBleed || isShrunk)) {
-              // Find the corresponding metal background mesh (Metal_Silver_FullBleed/Shrunk or Metal_White_FullBleed/Shrunk)
-              let metalMatForColor = null; // Always from FullBleed for color consistency
-              let metalMatForMaps = null;  // From corresponding mesh (fullBleed or shrunk)
-              const scene = sceneManagerRef.current?.getScene();
-              const meshNameLower = (layer.meshName || "").toLowerCase();
-              const activeType = materialType.activeMaterialTypeRef.current;
-
-              // First, detect metal type from scene meshes (more reliable than materialType)
-              let detectedMetalType = null;
-              if (scene) {
-                scene.traverse((obj) => {
-                  if (obj.isMesh && obj.name) {
-                    const objNameLower = obj.name.toLowerCase();
-                    if (objNameLower.includes("silver") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
-                      detectedMetalType = "silver";
-                    } else if (objNameLower.includes("white") && objNameLower.includes("metal") && (objNameLower.includes("fullbleed") || objNameLower.includes("shrunk"))) {
-                      detectedMetalType = "white";
-                    }
-                  }
-                });
-              }
-
-              // Use detected type from scene if available, otherwise fall back to activeType
-              const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (activeType === "METAL" || meshNameLower.includes("silver")));
-              const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (activeType === "METAL_BOX" || meshNameLower.includes("white")));
-
-              if (scene) {
-                scene.traverse((obj) => {
-                  if (obj.isMesh && obj.material) {
-                    const objNameLower = (obj.name || "").toLowerCase();
-
-                    // Always find FullBleed for color (ensures consistency)
-                    if (!metalMatForColor) {
-                      let shouldMatchFullBleed = false;
-                      if (isSilver) {
-                        shouldMatchFullBleed = objNameLower.includes("silver") &&
-                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                          !objNameLower.includes("artwork");
-                      } else if (isWhite) {
-                        // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-                        shouldMatchFullBleed = objNameLower.includes("white") &&
-                          (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                          !objNameLower.includes("artwork");
-                      }
-
-                      if (shouldMatchFullBleed) {
-                        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                        mats.forEach((m) => {
-                          if (m.metalness !== undefined && m.metalness > 0.4) {
-                            metalMatForColor = m;
-                          }
-                        });
-                      }
-                    }
-
-                    // Find corresponding mesh for PBR maps (fullBleed or shrunk)
-                    if (!metalMatForMaps) {
-                      let shouldMatch = false;
-                      if (isFullBleed) {
-                        if (isSilver) {
-                          shouldMatch = objNameLower.includes("silver") &&
-                            (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                            !objNameLower.includes("artwork");
-                        } else if (isWhite) {
-                          // Match Metal_White_FullBleed - simplified like silver (just check for "white")
-                          shouldMatch = objNameLower.includes("white") &&
-                            (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")) &&
-                            !objNameLower.includes("artwork");
-                        }
-                      } else if (isShrunk) {
-                        if (isSilver) {
-                          shouldMatch = objNameLower.includes("silver") &&
-                            (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                            !objNameLower.includes("artwork");
-                        } else if (isWhite) {
-                          // Match Metal_White_Shrunk - simplified like silver (just check for "white")
-                          shouldMatch = objNameLower.includes("white") &&
-                            (objNameLower.includes("shrunk") || objNameLower.includes("shrink")) &&
-                            !objNameLower.includes("artwork");
-                        }
-                      }
-
-                      if (shouldMatch) {
-                        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                        mats.forEach((m) => {
-                          if (m.metalness !== undefined && m.metalness > 0.4) {
-                            metalMatForMaps = m;
-                          }
-                        });
-                      }
-                    }
-                  }
-                });
-              }
-
-            // Apply proper metal PBR properties to artwork layer based on metal color
-            const metalColor = materialType.metalColor;
-            const metalFinish = lighting.metalFinish || "brushed";
-            const isMetalBox = activeType === "METAL_BOX";
+            // CRITICAL: ONLY assign texture + transparency settings - ALL metal PBR properties come from MetalMaterial.applyMetalState()
+            // This ensures true centralized control - no property overrides here
             
-            // Apply metal PBR for artwork layer (both silver and white metal)
-            if (metalColor === "brushed_silver" || isMetalBox) {
-              // Apply full metal PBR for artwork layer - complete blending with metal
-              mat.metalness = 1.0; // Full metalness for complete metallic blending
-              
-              // Set roughness based on metal finish and material type
-              if (metalFinish === "polished") {
-                mat.roughness = 0.05; // Very smooth, highly reflective (same as metal layer)
-                mat.envMapIntensity = 0.1; // Very minimal environment reflections for polished
-              } else {
-                // brushed finish - extremely low shininess very matte brushed metal
-                mat.roughness = 0.95; // Extremely low shininess - very matte brushed metal (0-1 range for proper PBR)
-                mat.envMapIntensity = 0.0; // No reflections on metal
-              }
-              
-              // Apply anisotropy for brushed metal directional highlight (same as metal layer)
-              if (mat.isMeshPhysicalMaterial && metalFinish === "brushed") {
-                if (mat.anisotropy !== undefined) mat.anisotropy = 0.15; // Minimal brushed directional highlight (same as metal layer)
-                if (mat.anisotropyRotation !== undefined) mat.anisotropyRotation = 0.0; // Brush direction
-              }
-              
-              // Apply brighter silver color for artwork layer - maintains metal tint with increased brightness
-              mat.color.setRGB(1.5, 1.5, 1.55); // Very bright silver tint for artwork visibility while maintaining metal blending
-            } else {
-              // For non-silver metals (white, etc.), use minimal metal PBR
-              mat.metalness = 0.1; // Very small amount of metalness
-              mat.roughness = 0.85; // Slightly less than fully matte for subtle reflection
-              mat.envMapIntensity = 0.05; // Very minimal environment reflections
-              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for artwork
-            }
-            
-            mat.envMap = null; // Use scene.environment
-            
-            // For silver, don't copy PBR maps - we're using direct roughness/metalness values for blending
-            // For non-silver metals, optionally copy minimal PBR maps if needed
-            if (metalColor !== "brushed_silver" && metalMatForMaps) {
-              // Only copy normalMap for subtle surface detail (non-silver only)
-              if (metalMatForMaps.normalMap) {
-                mat.normalMap = metalMatForMaps.normalMap;
-                if (mat.normalScale && metalMatForMaps.normalScale) {
-                  mat.normalScale.set(0.3, 0.3); // Very subtle normal map intensity
-                } else if (mat.normalScale) {
-                  mat.normalScale.set(0.3, 0.3);
-                }
-              }
-            }
-            
-            // Remove all PBR maps for silver to ensure our direct values are used
-            if (metalColor === "brushed_silver") {
-              mat.normalMap = null;
-              mat.roughnessMap = null;
-              mat.metalnessMap = null;
-            } else {
-              // For non-silver, remove metalnessMap
-              mat.metalnessMap = null;
-            }
-            
-            // Remove other PBR maps - artwork layer doesn't need them
-            mat.aoMap = null;
-            mat.emissiveMap = null;
-            mat.displacementMap = null;
-            mat.bumpMap = null;
-            mat.clearcoatMap = null;
-            mat.clearcoatNormalMap = null;
-            mat.clearcoatRoughnessMap = null;
-            mat.sheenColorMap = null;
-            mat.sheenRoughnessMap = null;
-            mat.aoMap = null;
-            mat.emissiveMap = null;
-            mat.displacementMap = null;
-            mat.bumpMap = null;
-            mat.clearcoatMap = null;
-            mat.clearcoatNormalMap = null;
-            mat.clearcoatRoughnessMap = null;
-            mat.sheenColorMap = null;
-            mat.sheenRoughnessMap = null;
-            
-            // Remove all clearcoat and specular properties
-            if (mat.clearcoat !== undefined) mat.clearcoat = 0.0;
-            if (mat.clearcoatRoughness !== undefined) mat.clearcoatRoughness = 1.0;
-            if (mat.specularIntensity !== undefined) mat.specularIntensity = 0.0;
-            if (mat.sheen !== undefined) mat.sheen = 0.0;
-            
-            // Color is already set above based on metal color (silver gets exact metal color, others get 0.5)
-            // Only set if not already set for silver
-            if (mat.color && metalColor !== "brushed_silver") {
-              mat.color.setRGB(0.5, 0.5, 0.5); // Moderate brightness boost for non-silver artwork
-            }
-            // Remove emissive to prevent washing out the texture
-            if (mat.emissive !== undefined) {
-              mat.emissive.setRGB(0, 0, 0);
-              mat.emissiveIntensity = 0.0;
-            }
-
-              // Apply transparency settings for alpha areas to show metal background
-              // Use alphaToCoverage to reduce white halo around text edges
-              mat.transparent = true;
-              mat.opacity = 1.0;
-              mat.alphaTest = 0.08; // Higher threshold to remove white fringe pixels (0.05-0.15 range)
-              mat.alphaToCoverage = true; // Important: reduces fringes while keeping edges smooth (needs MSAA)
-              mat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
-              mat.depthTest = true; // Enable depth testing for proper layering
-              // Don't set side property - let material use its original setting
-            }
+            // Apply transparency settings for alpha areas to show metal background
+            // Use alphaToCoverage to reduce white halo around text edges
+            // This is artwork overlay policy, not metal PBR, so it's safe to set here
+            mat.transparent = true;
+            mat.opacity = 1.0;
+            mat.alphaTest = 0.08; // Higher threshold to remove white fringe pixels (0.05-0.15 range)
+            mat.alphaToCoverage = true; // Important: reduces fringes while keeping edges smooth (needs MSAA)
+            mat.depthWrite = false; // Critical: don't write to depth buffer so metal background shows through alpha
+            mat.depthTest = true; // Enable depth testing for proper layering
 
             mat.needsUpdate = true;
+            
+            // CRITICAL: Do NOT re-apply metal state here after texture update
+            // This causes re-traversal and can reset render states mid-mutation
+            // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
           } else if (isMirror) {
             // Allow Artwork_FullBleed, Artwork_Shrunk, and frames
             if (!isFrame && !isFullBleed && !isShrunk) {
@@ -1179,14 +1043,15 @@ export function useArtworkViewer({
 
             mat.map = clonedTex;
 
-            // For mirrors: Set artwork layer to matte with minimal reflection (don't copy mirror's reflective properties)
-            if (isFullBleed || isShrunk) {
+            // For mirrors: Apply centralized mirror state (single source of truth)
+            // MirrorMaterial.jsx owns all PBR properties, render flags, and transparency settings
+            if (isMirror && (isFullBleed || isShrunk)) {
               // Store original material properties BEFORE modifying them (for reset functionality)
               if (!textureLayersHook.getOriginalMaterialProperties(layerId)) {
                 textureLayersHook.storeOriginalMaterialProperties(layerId, mat);
               }
 
-              // Remove any reflection-related maps
+              // Clear reflection-related maps (preset will handle PBR properties)
               mat.normalMap = null;
               mat.roughnessMap = null;
               mat.metalnessMap = null;
@@ -1196,32 +1061,32 @@ export function useArtworkViewer({
               mat.sheenColorMap = null;
               mat.sheenRoughnessMap = null;
 
-              // Make it brighter but still matte + non‑reflective
-              if (mat.color) {
-                // Slightly “hotter” than pure white; tweak 1.1–1.3 to taste
-                mat.color.setRGB(3.0, 3.0, 3.0);
+              // Apply centralized mirror state (single source of truth)
+              const renderer = sceneManagerRef.current?.getRenderer();
+              const model = modelManagerRef.current?.getModel();
+
+              if (model && renderer) {
+                const base = materialProcessorRef.current?.getBaseEnvMapIntensities?.();
+                const envMap = environmentManagerRef.current?.getEnvironmentMap();
+                applyMirrorState(model, renderer, {
+                  reflectionIntensity: lighting.reflectionIntensity,
+                  showReflections: lighting.showReflections,
+                  baseEnvMapIntensities: base,
+                  envMap: envMap, // Explicitly pass the HDRI envMap
+                });
+              } else {
+                // Fallback: if refs not available, at least mark needsUpdate
+                mat.needsUpdate = true;
               }
-
-              // Set matte properties: high roughness (matte), low metalness, minimal reflection
-              mat.roughness = 0.95; // Very matte (high roughness = less reflective)
-              mat.metalness = 0.0; // Non-metallic
-              mat.envMapIntensity = 0.1; // Very low environment map intensity (minimal reflection)
-
-              // Keep useful maps if they exist (AO, emissive, etc.)
-              // But remove reflection-related ones
+            } else {
+              // For frames or other meshes, just update the texture
+              mat.needsUpdate = true;
             }
-
-            // Enable transparency for PNG textures (alpha channel support)
-            mat.transparent = true;
-            mat.opacity = 1.0;
-            mat.alphaTest = 0.01; // Small alpha test to help with transparency
-            mat.side = THREE.DoubleSide;
-            mat.depthWrite = false; // Important for transparency rendering
-
-            mat.needsUpdate = true;
           } else {
             // For non-metals: apply processing as before
             // Dispose old texture to prevent remnants
+
+            
             const originalTex = textureLayersHook.getOriginalTexture(layerId);
             if (mat.map && mat.map !== originalTex) {
               mat.map.dispose();
@@ -1598,6 +1463,7 @@ export function useArtworkViewer({
   // Setup function - initialize everything
   const setup = async (options = {}) => {
     const {
+      orientation,
       modelPath: newModelPath,
       artworkTexture,
       materialType: newMaterialType,
@@ -1607,13 +1473,39 @@ export function useArtworkViewer({
     } = options;
 
     try {
-      // 1. Set material type first (before model load if needed)
-      if (newMaterialType) {
-        materialType.setSelectedMaterialType(newMaterialType);
+      // Validate required parameters
+      if (!artworkTexture) {
+        throw new Error("artworkTexture is required. Please provide a path or URL to the artwork image.");
+      }
+      
+      if (!orientation) {
+        throw new Error("orientation is required. Please provide 'portrait' or 'landscape'");
+      }
+      
+      if (!newMaterialType) {
+        throw new Error("materialType is required. Please provide one of: ACRYLIC, METAL, METAL_BOX, WOOD, MIRROR");
       }
 
-      // 2. Load/reload model if new path provided
-      if (newModelPath) {
+      // Validate orientation
+      if (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE) {
+        throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
+      }
+
+      // 1. Set material type first (before model load if needed)
+      materialType.setSelectedMaterialType(newMaterialType);
+
+      // 2. Auto-select model path based on orientation and material type if not provided
+      let finalModelPath = newModelPath;
+      if (!finalModelPath) {
+        // getModelPath now requires orientation and accepts both display types (METAL_SILVER) and internal types (METAL)
+        finalModelPath = getModelPath(orientation, newMaterialType);
+        if (!finalModelPath) {
+          throw new Error(`Could not determine model path for orientation: ${orientation}, material type: ${newMaterialType}`);
+        }
+      }
+
+      // 3. Load/reload model
+      if (finalModelPath) {
         if (!modelManagerRef.current) {
           throw new Error("ModelManager not initialized. Please wait for viewer to initialize.");
         }
@@ -1660,16 +1552,26 @@ export function useArtworkViewer({
           lightingManagerRef.current.applyMaterialDefaults(activeMaterialType);
           const newLighting = lightingManagerRef.current.getLighting();
           lighting.setLighting(newLighting);
+          // Set default reflectionIntensity based on material type
+          const defaultReflectionIntensity = getDefaultReflectionIntensity(activeMaterialType);
+          lighting.setReflectionIntensity(defaultReflectionIntensity);
         }
 
         // Load the new model and process materials
         await new Promise((resolve, reject) => {
           modelManagerRef.current.loadModel(
-            newModelPath,
+            finalModelPath,
             (loadedModel, boundingBox) => {
               if (!materialProcessorRef.current) {
                 reject(new Error("MaterialProcessor not initialized"));
                 return;
+              }
+
+              // CRITICAL: Snapshot original metal properties IMMEDIATELY after GLTF load
+              // Must be called BEFORE any preset system or material processing touches materials
+              // This preserves true original values before any mutations
+              if (activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX") {
+                snapshotOriginalMetal(loadedModel);
               }
 
               // Collect meshes
@@ -1716,6 +1618,19 @@ export function useArtworkViewer({
               // For acrylics, add a super‑white emissive base under the artwork surfaces
               addAcrylicEmissiveBaseLayers(meshVisibilityManagerRef.current, activeMaterialType);
 
+              // CRITICAL: For metals, apply centralized state immediately after material processing
+              // This ensures all PBR properties come from METAL_FINISH_PRESETS (single source of truth)
+              // This is the ONLY initial apply - reactive updates are handled by useMaterialUpdates hook
+              if ((activeMaterialType === "METAL" || activeMaterialType === "METAL_BOX") && materialModule.applyMetalState) {
+                const renderer = sceneManagerRef.current?.getRenderer();
+                materialModule.applyMetalState(loadedModel, renderer, {
+                  metalFinish: lighting.metalFinish,
+                  metalColor: materialType.metalColor ?? "brushed_silver", // Normalize to prevent null re-runs
+                  showReflections: lighting.showReflections,
+                  reflectionIntensity: lighting.reflectionIntensity,
+                });
+              }
+
               // Defer material updates with environment map to allow initial render
               // This significantly speeds up setup, especially for mirror mode
               const envMap = environmentManagerRef.current?.getEnvironmentMap();
@@ -1731,14 +1646,32 @@ export function useArtworkViewer({
                         lighting.reflectionIntensity
                       );
                     }
-                  } else if (materialModule.updateMaterials) {
-                    materialModule.updateMaterials(
-                      loadedModel,
-                      envMap,
-                      lighting.showReflections,
-                      lighting.reflectionIntensity,
-                      materialProcessorRef.current.getBaseEnvMapIntensities()
-                    );
+                  } else {
+                    const renderer = sceneManagerRef.current?.getRenderer();
+                    
+                    // For MIRROR: always call applyMirrorState (single source of truth)
+                    // Pass envMap explicitly so mirror materials can reflect the HDRI
+                    if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState && renderer) {
+                      materialModule.applyMirrorState(loadedModel, renderer, {
+                        reflectionIntensity: lighting.reflectionIntensity,
+                        showReflections: lighting.showReflections,
+                        baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
+                        envMap: envMap, // Explicitly pass the HDRI envMap
+                      });
+                    } else if (materialModule.updateMaterials && renderer) {
+                      materialModule.updateMaterials(
+                        loadedModel,
+                        envMap,
+                        lighting.showReflections,
+                        lighting.reflectionIntensity,
+                        materialProcessorRef.current.getBaseEnvMapIntensities(),
+                        renderer
+                      );
+                    }
+                    
+                    // CRITICAL: Do NOT re-apply metal state here after updateMaterials
+                    // This causes timing issues and "original captured after already modified" bugs
+                    // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
                   }
                 }, 0);
               }
@@ -1759,14 +1692,41 @@ export function useArtworkViewer({
         }
       }
 
-      // Load/update HDRI if custom path provided
+      // Load/update HDRI - automatically select based on material type if not provided
       // Note: HDRI loading happens in parallel with texture loading for better performance
-      if (customHdriPath && environmentManagerRef.current) {
+      if (environmentManagerRef.current) {
+        // Convert display type to internal type before HDRI lookup
+        const internalType =
+          getMaterialTypeInfo(newMaterialType)?.internalType || newMaterialType;
+        
+        // Use custom HDRI if provided, otherwise auto-select based on material type
+        const hdriToLoad = customHdriPath || getHDRIPath(internalType);
+        
+        console.log("[HDRI SETUP]", {
+          newMaterialType,
+          internalType,
+          customHdriPath,
+          hdriToLoad,
+          hasEnvManager: !!environmentManagerRef.current,
+        });
+        
         // Don't await HDRI loading - let it happen in parallel with texture application
         // This allows the scene to render faster
         environmentManagerRef.current.loadHDRI(
-          customHdriPath,
+          hdriToLoad,
           (newEnvMap) => {
+            console.log("[HDRI SETUP] HDRI loaded successfully", {
+              hdriToLoad,
+              hasEnvMap: !!newEnvMap,
+            });
+            
+            // Verify HDRI is actually applied to scene
+            const scene = sceneManagerRef.current?.getScene();
+            console.log("[ENV CHECK]", {
+              sceneEnv: !!scene?.environment,
+              envMap: !!environmentManagerRef.current?.getEnvironmentMap?.(),
+            });
+            
             const model = modelManagerRef.current?.getModel();
             if (model && materialType.materialModuleRef.current) {
               const activeType = materialType.activeMaterialTypeRef.current;
@@ -1786,22 +1746,43 @@ export function useArtworkViewer({
                     newEnvMap,
                     lighting.reflectionIntensity
                   );
-                } else if (materialModule.updateMaterials) {
-                  materialModule.updateMaterials(
-                    model,
-                    newEnvMap,
-                    lighting.showReflections,
-                    lighting.reflectionIntensity,
-                    materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
-                  );
+                } else {
+                  const renderer = sceneManagerRef.current?.getRenderer();
+                  
+                  // For MIRROR: always call applyMirrorState (single source of truth)
+                  // Pass envMap explicitly so mirror materials can reflect the HDRI
+                  if (activeType === "MIRROR" && materialModule.applyMirrorState && renderer) {
+                    materialModule.applyMirrorState(model, renderer, {
+                      reflectionIntensity: lighting.reflectionIntensity,
+                      showReflections: lighting.showReflections,
+                      baseEnvMapIntensities: materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+                      envMap: newEnvMap, // Explicitly pass the loaded HDRI envMap
+                    });
+                  } else if (materialModule.updateMaterials && renderer) {
+                    materialModule.updateMaterials(
+                      model,
+                      newEnvMap,
+                      lighting.showReflections,
+                      lighting.reflectionIntensity,
+                      materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
+                      renderer
+                    );
+                  }
                 }
               }, 0);
             }
           },
           (error) => {
-            console.warn('HDRI loading failed:', error);
+            console.warn('[HDRI SETUP] HDRI loading failed:', {
+              hdriToLoad,
+              error,
+            });
           }
         );
+      } else {
+        console.warn("[HDRI SETUP] environmentManagerRef.current is null, cannot load HDRI", {
+          newMaterialType,
+        });
       }
 
       // 3. Apply artwork texture - optimize by only applying to active mode initially
@@ -1965,19 +1946,34 @@ export function useArtworkViewer({
     // SIMPLIFIED API (Primary APIs)
     // ============================================
     /**
-     * Setup - Initialize everything with model, textures, and material type
+     * Setup - Initialize everything with artwork, orientation, material type, and optional frame
+     * Model path is automatically selected based on orientation and material type
+     * 
      * @param {Object} options
-     * @param {string} options.modelPath - Path to GLB model file
-     * @param {string} options.artworkTexture - Path to artwork texture (applied to both fullBleed and shrunk)
-     * @param {string} options.materialType - Material type (ACRYLIC, METAL, METAL_BOX, WOOD, MIRROR)
+     * @param {string} options.artworkTexture - REQUIRED: Path or URL to artwork texture (applied to both fullBleed and shrunk)
+     * @param {string} options.orientation - REQUIRED: Orientation type ('portrait' or 'landscape')
+     * @param {string} options.materialType - REQUIRED: Material type ('ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR')
+     * @param {string} options.modelPath - Optional: Custom model path (auto-selected if not provided)
      * @param {string} options.frameTexture - Optional: Path to frame texture (for shrunk mode)
      * @param {string} options.mode - Optional: Initial mode ('fullBleed' or 'shrunk', default: 'fullBleed')
+     * @param {string} options.hdriPath - Optional: Custom HDRI path (auto-selected based on material type if not provided)
+     * 
+     * @example
+     * await viewerRef.current.setup({
+     *   artworkTexture: '/path/to/artwork.jpg',
+     *   orientation: 'portrait',
+     *   materialType: 'ACRYLIC'
+     * });
      */
     setup,
 
     /**
      * Set mode - Switch between fullBleed and shrunk
      * @param {string} mode - 'fullBleed' or 'shrunk'
+     * 
+     * @example
+     * viewerRef.current.setMode('shrunk'); // Switch to shrunk mode (shows frame)
+     * viewerRef.current.setMode('fullBleed'); // Switch to fullBleed mode (no frame)
      */
     setMode,
 
@@ -1995,7 +1991,10 @@ export function useArtworkViewer({
 
     /**
      * Update frame texture - Applies to Frame_Edge mesh (for shrunk mode)
-     * @param {string} texturePath - Path to frame texture
+     * @param {string} texturePath - Path or URL to frame texture
+     * 
+     * @example
+     * await viewerRef.current.updateFrame('/path/to/frame.jpg');
      */
     updateFrame,
 
@@ -2015,7 +2014,7 @@ export function useArtworkViewer({
     // ============================================
     // TEXTURE MANAGEMENT
     // ============================================
-    updateArtwork,
+    // updateArtwork already defined above in SIMPLIFIED API section
     updateTexture: (identifier, texturePath) => {
       const layer = findTextureLayer(
         textureLayersHook.allTextureLayersRef.current,
@@ -2351,12 +2350,10 @@ export function useArtworkViewer({
     // ============================================
     // MATERIAL CONTROL
     // ============================================
-    setMaterialType: (type) => {
-      materialType.setSelectedMaterialType(type);
-    },
+    // setMaterialType already defined above in SIMPLIFIED API section
     getMaterialType: () => materialType.activeMaterialType,
     getDetectedMaterialType: () => materialType.detectedMaterialType,
-    getMaterialModule: () => materialType.materialModuleRef.current || null,
+    // getMaterialModule defined below in ADVANCED section - using MaterialProcessor version
     setMetalFinish: (finish) => {
       lighting.setMetalFinish(finish);
     },
@@ -2383,18 +2380,32 @@ export function useArtworkViewer({
     updateMaterials: () => {
       const model = modelManagerRef.current?.getModel();
       const envMap = environmentManagerRef.current?.getEnvironmentMap();
-      if (!model || !envMap || !materialProcessorRef.current) return;
+      if (!model || !materialProcessorRef.current) return;
 
       const materialModule = materialType.materialModuleRef.current;
-      if (materialModule && materialModule.updateMaterials) {
-        const activeType = materialType.activeMaterialTypeRef.current;
-        materialModule.updateMaterials(
-          model,
-          envMap,
-          lighting.showReflections,
-          lighting.reflectionIntensity,
-          materialProcessorRef.current.getBaseEnvMapIntensities()
-        );
+      const activeType = materialType.activeMaterialTypeRef.current;
+      const renderer = sceneManagerRef.current?.getRenderer();
+      
+      if (materialModule && renderer) {
+        // For MIRROR: always call applyMirrorState (single source of truth)
+        // Pass envMap explicitly so mirror materials can reflect the HDRI
+        if (activeType === "MIRROR" && materialModule.applyMirrorState) {
+          materialModule.applyMirrorState(model, renderer, {
+            reflectionIntensity: lighting.reflectionIntensity,
+            showReflections: lighting.showReflections,
+            baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
+            envMap: envMap, // Explicitly pass the HDRI envMap
+          });
+        } else if (materialModule.updateMaterials && envMap) {
+          materialModule.updateMaterials(
+            model,
+            envMap,
+            lighting.showReflections,
+            lighting.reflectionIntensity,
+            materialProcessorRef.current.getBaseEnvMapIntensities(),
+            renderer
+          );
+        }
         forceRender();
       }
     },
@@ -2682,6 +2693,12 @@ export function useArtworkViewer({
         // Update lighting hook state
         const defaultLighting = lightingManagerRef.current.getLighting();
         lighting.setLighting(defaultLighting);
+        // Set default reflectionIntensity based on current material type
+        const activeType = materialType.activeMaterialTypeRef.current || materialType.activeMaterialType;
+        if (activeType) {
+          const defaultReflectionIntensity = getDefaultReflectionIntensity(activeType);
+          lighting.setReflectionIntensity(defaultReflectionIntensity);
+        }
       }
     },
     applyMaterialLightingDefaults: (materialType) => {
@@ -2689,6 +2706,9 @@ export function useArtworkViewer({
         lightingManagerRef.current.applyMaterialDefaults(materialType);
         const newLighting = lightingManagerRef.current.getLighting();
         lighting.setLighting(newLighting);
+        // Set default reflectionIntensity based on material type
+        const defaultReflectionIntensity = getDefaultReflectionIntensity(materialType);
+        lighting.setReflectionIntensity(defaultReflectionIntensity);
       }
     },
     getMaterialLightingDefaults: (materialType) => {

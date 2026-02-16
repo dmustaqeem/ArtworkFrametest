@@ -860,15 +860,22 @@ export default function TextureLayerManager({
           
           // Set material properties for metallic brushed finish
           finalMat.metalness = 1.0; // Make it metallic
-          finalMat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 0.75; // Use frame's roughness (brushed: 0.75)
+          // Use frame's roughness (should be 1.0 from centralized preset), fallback to 1.0 if not set
+          finalMat.roughness = metalMatForMaps.roughness !== undefined ? metalMatForMaps.roughness : 1.0;
           
-          // Copy environment map and intensity for reflections
+          // Copy environment map and intensity for reflections (should be 0.0 from centralized preset)
           if (metalMatForMaps.envMap) {
             finalMat.envMap = metalMatForMaps.envMap;
           }
-          if (metalMatForMaps.envMapIntensity !== undefined) {
-            finalMat.envMapIntensity = metalMatForMaps.envMapIntensity;
-          }
+          // Use frame's envMapIntensity (should be 0.0 from centralized preset), fallback to 0.0 if not set
+          finalMat.envMapIntensity = metalMatForMaps.envMapIntensity !== undefined ? metalMatForMaps.envMapIntensity : 0.0;
+          
+          // Disable all specular and clearcoat properties to prevent light reflections and shininess
+          if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
+          if (finalMat.clearcoat !== undefined) finalMat.clearcoat = 0.0;
+          if (finalMat.clearcoatRoughness !== undefined) finalMat.clearcoatRoughness = 1.0;
+          if (finalMat.sheen !== undefined) finalMat.sheen = 0.0;
+          if (finalMat.sheenRoughness !== undefined) finalMat.sheenRoughness = 1.0;
         }
         
         // ALWAYS copy color from FullBleed mesh (ensures consistency between fullBleed and shrunk)
@@ -884,7 +891,14 @@ export default function TextureLayerManager({
         console.warn(`Metal background material not found for ${layer.meshName} (isFullBleed: ${isFullBleed}, isShrunk: ${isShrunk})`);
         // Fallback: Set metal properties even if frame material not found
         finalMat.metalness = 1.0;
-        finalMat.roughness = 0.75; // Default to brushed finish
+        finalMat.roughness = 1.0; // Maximum roughness - completely matte, no shininess
+        finalMat.envMapIntensity = 0.0; // No reflections
+        // Disable all specular and clearcoat properties
+        if (finalMat.specularIntensity !== undefined) finalMat.specularIntensity = 0.0;
+        if (finalMat.clearcoat !== undefined) finalMat.clearcoat = 0.0;
+        if (finalMat.clearcoatRoughness !== undefined) finalMat.clearcoatRoughness = 1.0;
+        if (finalMat.sheen !== undefined) finalMat.sheen = 0.0;
+        if (finalMat.sheenRoughness !== undefined) finalMat.sheenRoughness = 1.0;
       }
       
       // Apply minimal transparency settings (matching working test app)

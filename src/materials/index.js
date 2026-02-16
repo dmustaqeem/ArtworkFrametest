@@ -66,7 +66,9 @@ export const MATERIAL_MODULES = {
     LightingControls: MetalMaterial.MetalLightingControls,
     updateMaterials: MetalMaterial.updateMetalMaterials,
     updateReflectionIntensity: MetalMaterial.updateMetalReflectionIntensity,
-    updateFinish: MetalMaterial.updateMetalFinish,
+    updateFinish: MetalMaterial.updateMetalFinish, // DEPRECATED: Use applyMetalState instead
+    applyMetalState: MetalMaterial.applyMetalState,
+    METAL_FINISH_PRESETS: MetalMaterial.METAL_FINISH_PRESETS, // Export for use in other modules
     updateColor: MetalMaterial.updateMetalColor,
   },
   METAL_BOX: {
@@ -84,8 +86,10 @@ export const MATERIAL_MODULES = {
     LightingControls: MetalBoxMaterial.MetalBoxLightingControls,
     updateMaterials: MetalBoxMaterial.updateMetalBoxMaterials,
     updateReflectionIntensity: MetalBoxMaterial.updateMetalBoxReflectionIntensity,
-    updateFinish: MetalBoxMaterial.updateMetalBoxFinish,
+    updateFinish: MetalBoxMaterial.updateMetalBoxFinish, // DEPRECATED: Use applyMetalState instead
+    applyMetalState: MetalMaterial.applyMetalState, // Use centralized function from MetalMaterial
     updateColor: MetalBoxMaterial.updateMetalBoxColor,
+    METAL_FINISH_PRESETS: MetalBoxMaterial.METAL_FINISH_PRESETS, // Export for use in other modules (uses centralized from MetalMaterial)
   },
   WOOD: {
     name: "Eco Friendly Wood Print",
@@ -110,6 +114,7 @@ export const MATERIAL_MODULES = {
     LightingControls: MirrorMaterial.MirrorLightingControls,
     updateMaterials: MirrorMaterial.updateMirrorMaterials,
     updateReflectionIntensity: MirrorMaterial.updateMirrorReflectionIntensity,
+    applyMirrorState: MirrorMaterial.applyMirrorState, // Single source of truth for mirror materials
   },
 };
 

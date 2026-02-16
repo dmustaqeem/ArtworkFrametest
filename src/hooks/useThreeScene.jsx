@@ -252,12 +252,14 @@ export function useThreeScene(
         // Update materials with environment map if HDRI is already loaded
         const envMap = environmentManager.getEnvironmentMap();
         if (envMap && materialModule.updateMaterials) {
+          const renderer = sceneManagerRef.current?.getRenderer();
           materialModule.updateMaterials(
             model,
             envMap,
             showReflections,
             reflectionIntensity,
-            materialProcessor.getBaseEnvMapIntensities()
+            materialProcessor.getBaseEnvMapIntensities(),
+            renderer
           );
         }
 
