@@ -1631,6 +1631,21 @@ export function useArtworkViewer({
                 });
               }
 
+              // OPTIMIZATION: For mirrors, apply state immediately (even without HDRI)
+              // This makes mirrors look correct right away, HDRI will enhance it later
+              if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState) {
+                const renderer = sceneManagerRef.current?.getRenderer();
+                // Apply mirror state immediately with current envMap (may be null, that's OK)
+                // Mirror will use scene.environment when HDRI loads
+                const envMap = environmentManagerRef.current?.getEnvironmentMap();
+                materialModule.applyMirrorState(loadedModel, renderer, {
+                  reflectionIntensity: lighting.reflectionIntensity,
+                  showReflections: lighting.showReflections,
+                  baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
+                  envMap: envMap, // May be null initially, will be updated when HDRI loads
+                });
+              }
+
               // Defer material updates with environment map to allow initial render
               // This significantly speeds up setup, especially for mirror mode
               const envMap = environmentManagerRef.current?.getEnvironmentMap();
@@ -1646,19 +1661,11 @@ export function useArtworkViewer({
                         lighting.reflectionIntensity
                       );
                     }
-                  } else {
+                  } else if (activeMaterialType !== "MIRROR") {
+                    // Skip mirrors here - already applied above
                     const renderer = sceneManagerRef.current?.getRenderer();
                     
-                    // For MIRROR: always call applyMirrorState (single source of truth)
-                    // Pass envMap explicitly so mirror materials can reflect the HDRI
-                    if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState && renderer) {
-                      materialModule.applyMirrorState(loadedModel, renderer, {
-                        reflectionIntensity: lighting.reflectionIntensity,
-                        showReflections: lighting.showReflections,
-                        baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
-                        envMap: envMap, // Explicitly pass the HDRI envMap
-                      });
-                    } else if (materialModule.updateMaterials && renderer) {
+                    if (materialModule.updateMaterials && renderer) {
                       materialModule.updateMaterials(
                         loadedModel,
                         envMap,
@@ -1668,11 +1675,11 @@ export function useArtworkViewer({
                         renderer
                       );
                     }
-                    
-                    // CRITICAL: Do NOT re-apply metal state here after updateMaterials
-                    // This causes timing issues and "original captured after already modified" bugs
-                    // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
                   }
+                  
+                  // CRITICAL: Do NOT re-apply metal state here after updateMaterials
+                  // This causes timing issues and "original captured after already modified" bugs
+                  // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
                 }, 0);
               }
 
@@ -1732,14 +1739,14 @@ export function useArtworkViewer({
                 } else {
                   const renderer = sceneManagerRef.current?.getRenderer();
                   
-                  // For MIRROR: always call applyMirrorState (single source of truth)
-                  // Pass envMap explicitly so mirror materials can reflect the HDRI
+                  // For MIRROR: re-apply mirror state with new HDRI envMap
+                  // This enhances mirrors with proper reflections once HDRI is loaded
                   if (activeType === "MIRROR" && materialModule.applyMirrorState && renderer) {
                     materialModule.applyMirrorState(model, renderer, {
                       reflectionIntensity: lighting.reflectionIntensity,
                       showReflections: lighting.showReflections,
                       baseEnvMapIntensities: materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
-                      envMap: newEnvMap, // Explicitly pass the loaded HDRI envMap
+                      envMap: newEnvMap, // Now pass the loaded HDRI envMap for enhanced reflections
                     });
                   } else if (materialModule.updateMaterials && renderer) {
                     materialModule.updateMaterials(
