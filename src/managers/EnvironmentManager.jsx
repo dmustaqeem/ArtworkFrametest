@@ -215,6 +215,7 @@ export class EnvironmentManager {
           const error = "HDRI file loaded but texture is invalid";
           if (onError) onError(error);
           return;
+
         }
 
         // Re-check PMREMGenerator and renderer are still available

@@ -494,21 +494,6 @@ export function useArtworkViewer({
     const meshVisibilityManager = createMeshVisibilityManager();
     meshVisibilityManagerRef.current = meshVisibilityManager;
 
-    // OPTIMIZATION: Load model and HDRI in parallel for faster scene loading
-    // Preload mirror HDRI in background to avoid loading delay when switching to mirror mode
-    const mirrorHDRIPath = MODEL_PATHS.HDRI_MIRROR;
-    environmentManager.preloadHDRI(
-      mirrorHDRIPath,
-      () => {
-        // Mirror HDRI preloaded successfully
-      },
-      (error) => {
-        if (process.env.NODE_ENV === 'development') {
-          console.warn("Failed to preload mirror HDRI:", error);
-        }
-      }
-    );
-
     // Determine HDRI path
     const effectiveType =
       materialTypeProp ||
@@ -587,6 +572,9 @@ export function useArtworkViewer({
     };
     
     // Start loading HDRI in parallel with model
+    // NOTE: This initialization loading only happens if hdriPath is provided as a prop.
+    // In API mode, hdriPath is NOT provided as a prop - setup() handles all asset loading.
+    // This prevents double-loading: initialization loads if props provided, setup() loads in API mode.
     if (hdriToLoad) {
       environmentManager.loadHDRI(
         hdriToLoad,
@@ -613,6 +601,9 @@ export function useArtworkViewer({
     }
 
     // Load model in parallel with HDRI
+    // NOTE: This initialization loading only happens if modelPath is provided as a prop.
+    // In API mode, modelPath is NOT provided as a prop - setup() handles all asset loading.
+    // This prevents double-loading: initialization loads if props provided, setup() loads in API mode.
     if (modelPath) {
       const activeMaterialType = materialType.activeMaterialType;
       materialType.activeMaterialTypeRef.current = activeMaterialType;
@@ -1770,8 +1761,8 @@ export function useArtworkViewer({
         }
       }
 
-      // 3. Apply artwork texture - optimize by only applying to active mode initially
-      // This significantly speeds up initial setup, especially for mirror mode
+      // 3. Apply artwork texture - load once and apply to both modes
+      // This optimizes by loading the texture only once and reusing it for both fullBleed and shrunk
       if (artworkTexture) {
         const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const fullBleedLayer = allLayers.find(l => l.meshType === MODE_TYPES.FULL_BLEED);
@@ -1783,26 +1774,27 @@ export function useArtworkViewer({
 
         // Determine which mode to apply first (use initialMode or default to fullBleed)
         const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
-        const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
         
-        // Apply to priority mode first (the one that will be visible)
+        // Load texture once and apply to priority mode immediately
+        // The texture will be cached by TextureManager, so the second call will use the cache
         if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
           await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
         } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
           await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
         }
         
-        // Defer applying to the other mode to avoid blocking
-        // This allows the scene to render faster while the other texture loads in the background
+        // Apply to the other mode - texture is already cached, so this is fast
+        // Defer slightly to allow initial render, but no network request needed
+        const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
         if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-          // Use setTimeout to defer, allowing browser to render first frame
+          // Texture is cached, so this will be fast - just apply to the other mesh
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
               if (process.env.NODE_ENV === 'development') {
                 console.warn('Failed to apply texture to deferred mode:', err);
               }
             });
-          }, 100);
+          }, 50); // Reduced delay since texture is cached
         } else if (otherMode === MODE_TYPES.SHRUNK && shrunkLayer) {
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
@@ -1810,7 +1802,7 @@ export function useArtworkViewer({
                 console.warn('Failed to apply texture to deferred mode:', err);
               }
             });
-          }, 100);
+          }, 50); // Reduced delay since texture is cached
         }
       }
 

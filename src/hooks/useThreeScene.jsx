@@ -69,13 +69,8 @@ export function useThreeScene(
     const textureManager = createTextureManager(renderer);
     textureManagerRef.current = textureManager;
 
-    // Load test textures
-    textureManager.loadTexture(MODEL_PATHS.TEST_IMAGES.IMAGE_1, (tex) => {
-      testTexture1Ref.current = tex;
-    });
-    textureManager.loadTexture(MODEL_PATHS.TEST_IMAGES.IMAGE_2, (tex) => {
-      testTexture2Ref.current = tex;
-    });
+    // NOTE: Test texture loading removed - these hooks are not used in API mode
+    // Test textures should only be loaded when explicitly needed, not during initialization
 
     // Initialize EnvironmentManager
     const environmentManager = createEnvironmentManager(scene, renderer);
