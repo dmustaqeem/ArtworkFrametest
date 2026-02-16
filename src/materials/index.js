@@ -48,7 +48,6 @@ export const MATERIAL_MODULES = {
     LightingControls: AcrylicMaterial.AcrylicLightingControls,
     updateMaterials: AcrylicMaterial.updateAcrylicMaterials,
     updateReflectionIntensity: AcrylicMaterial.updateAcrylicReflectionIntensity,
-    updateExposure: AcrylicMaterial.updateAcrylicExposure,
     applyArtworkMatteGlassGlossy: AcrylicMaterial.applyArtworkMatteGlassGlossy,
   },
   METAL: {
