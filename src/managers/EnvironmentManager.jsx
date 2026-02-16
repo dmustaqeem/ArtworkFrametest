@@ -294,30 +294,9 @@ export class EnvironmentManager {
         if (objectUrl) {
           URL.revokeObjectURL(objectUrl);
         }
-        
-        // Enhanced error handling with more details
-        let errorMsg = "Failed to load HDRI";
-        if (path instanceof File) {
-          errorMsg = `Failed to load HDRI file: ${path.name}`;
-        } else if (typeof path === 'string') {
-          errorMsg = `Failed to load HDRI: ${path}`;
-        }
-        
-        // Add error details
-        if (error) {
-          if (error.message) {
-            errorMsg += ` - ${error.message}`;
-          } else if (typeof error === 'string') {
-            errorMsg += ` - ${error}`;
-          }
-        }
-        
-        // Add helpful deployment hint
-        if (typeof path === 'string' && !path.startsWith('blob:')) {
-          errorMsg += `. Please check that the file exists at ${path} and is accessible.`;
-        }
-        
-        console.error("[EnvironmentManager] HDRI load error:", errorMsg, error);
+        const errorMsg = path instanceof File 
+          ? `Failed to load HDRI file: ${path.name}`
+          : `Failed to load HDRI: ${path}. Please check that the file exists in public/assets/hdr/ and restart the dev server.`;
         if (onError) onError(errorMsg);
       }
     );

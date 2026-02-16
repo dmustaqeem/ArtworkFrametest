@@ -118,24 +118,7 @@ export class ModelManager {
       },
       undefined, // onProgress
       (error) => {
-        // Enhanced error handling with more details
-        let errorMsg = "Failed to load GLB model";
-        if (error) {
-          if (error.message) {
-            errorMsg = `Failed to load GLB: ${error.message}`;
-          } else if (typeof error === 'string') {
-            errorMsg = `Failed to load GLB: ${error}`;
-          } else {
-            errorMsg = `Failed to load GLB: ${JSON.stringify(error)}`;
-          }
-        }
-        
-        // Add path info for debugging
-        if (path && typeof path === 'string') {
-          errorMsg += ` (Path: ${path})`;
-        }
-        
-        console.error("[ModelManager] Load error:", errorMsg, error);
+        const errorMsg = error?.message || "Failed to load GLB";
         if (onError) onError(errorMsg);
       }
     );

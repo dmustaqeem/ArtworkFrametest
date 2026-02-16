@@ -1561,9 +1561,7 @@ export function useArtworkViewer({
             finalModelPath,
             (loadedModel, boundingBox) => {
               if (!materialProcessorRef.current) {
-                const err = new Error("MaterialProcessor not initialized");
-                console.error("[Setup] MaterialProcessor error:", err);
-                reject(err);
+                reject(new Error("MaterialProcessor not initialized"));
                 return;
               }
 
@@ -1583,8 +1581,6 @@ export function useArtworkViewer({
               meshVisibilityHook.setMeshes(meshList);
 
               // Process materials (this creates texture layers)
-              // NOTE: Must be synchronous - materials need to be fully processed before rendering
-              // to avoid shader compilation errors (e.g., missing material.ior property)
               const processOptions = {
                 materialType: activeMaterialType,
                 metalFinish: lighting.metalFinish,
@@ -1633,21 +1629,6 @@ export function useArtworkViewer({
                 });
               }
 
-              // OPTIMIZATION: For mirrors, apply state immediately (even without HDRI)
-              // This makes mirrors look correct right away, HDRI will enhance it later
-              if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState) {
-                const renderer = sceneManagerRef.current?.getRenderer();
-                // Apply mirror state immediately with current envMap (may be null, that's OK)
-                // Mirror will use scene.environment when HDRI loads
-                const envMap = environmentManagerRef.current?.getEnvironmentMap();
-                materialModule.applyMirrorState(loadedModel, renderer, {
-                  reflectionIntensity: lighting.reflectionIntensity,
-                  showReflections: lighting.showReflections,
-                  baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
-                  envMap: envMap, // May be null initially, will be updated when HDRI loads
-                });
-              }
-
               // Defer material updates with environment map to allow initial render
               // This significantly speeds up setup, especially for mirror mode
               const envMap = environmentManagerRef.current?.getEnvironmentMap();
@@ -1663,11 +1644,19 @@ export function useArtworkViewer({
                         lighting.reflectionIntensity
                       );
                     }
-                  } else if (activeMaterialType !== "MIRROR") {
-                    // Skip mirrors here - already applied above
+                  } else {
                     const renderer = sceneManagerRef.current?.getRenderer();
                     
-                    if (materialModule.updateMaterials && renderer) {
+                    // For MIRROR: always call applyMirrorState (single source of truth)
+                    // Pass envMap explicitly so mirror materials can reflect the HDRI
+                    if (activeMaterialType === "MIRROR" && materialModule.applyMirrorState && renderer) {
+                      materialModule.applyMirrorState(loadedModel, renderer, {
+                        reflectionIntensity: lighting.reflectionIntensity,
+                        showReflections: lighting.showReflections,
+                        baseEnvMapIntensities: materialProcessorRef.current.getBaseEnvMapIntensities(),
+                        envMap: envMap, // Explicitly pass the HDRI envMap
+                      });
+                    } else if (materialModule.updateMaterials && renderer) {
                       materialModule.updateMaterials(
                         loadedModel,
                         envMap,
@@ -1677,25 +1666,17 @@ export function useArtworkViewer({
                         renderer
                       );
                     }
+                    
+                    // CRITICAL: Do NOT re-apply metal state here after updateMaterials
+                    // This causes timing issues and "original captured after already modified" bugs
+                    // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
                   }
-                  
-                  // CRITICAL: Do NOT re-apply metal state here after updateMaterials
-                  // This causes timing issues and "original captured after already modified" bugs
-                  // Metal state is handled by initial apply (after model load) and reactive updates (UI changes)
                 }, 0);
               }
 
               resolve();
             },
-            (error) => {
-              // Enhanced error logging for deployment debugging
-              console.error("[Setup] Model load error:", {
-                path: finalModelPath,
-                error: error?.message || error,
-                fullError: error,
-              });
-              reject(error);
-            }
+            reject
           );
         });
       } else if (newMaterialType) {
@@ -1749,14 +1730,14 @@ export function useArtworkViewer({
                 } else {
                   const renderer = sceneManagerRef.current?.getRenderer();
                   
-                  // For MIRROR: re-apply mirror state with new HDRI envMap
-                  // This enhances mirrors with proper reflections once HDRI is loaded
+                  // For MIRROR: always call applyMirrorState (single source of truth)
+                  // Pass envMap explicitly so mirror materials can reflect the HDRI
                   if (activeType === "MIRROR" && materialModule.applyMirrorState && renderer) {
                     materialModule.applyMirrorState(model, renderer, {
                       reflectionIntensity: lighting.reflectionIntensity,
                       showReflections: lighting.showReflections,
                       baseEnvMapIntensities: materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
-                      envMap: newEnvMap, // Now pass the loaded HDRI envMap for enhanced reflections
+                      envMap: newEnvMap, // Explicitly pass the loaded HDRI envMap
                     });
                   } else if (materialModule.updateMaterials && renderer) {
                     materialModule.updateMaterials(
@@ -1773,14 +1754,12 @@ export function useArtworkViewer({
             }
           },
           (error) => {
-            // Always log HDRI errors (not just in dev) for debugging deployment issues
-            console.error('[HDRI SETUP] HDRI loading failed:', {
-              hdriToLoad,
-              error,
-              errorMessage: error?.message || error,
-            });
-            // Don't throw - allow scene to render without HDRI
-            // Materials will use fallback or scene.environment
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('[HDRI SETUP] HDRI loading failed:', {
+                hdriToLoad,
+                error,
+              });
+            }
           }
         );
       } else {
@@ -1791,8 +1770,8 @@ export function useArtworkViewer({
         }
       }
 
-      // 3. Apply artwork texture - NON-BLOCKING: load in background, don't await
-      // This allows setup to complete immediately while textures load asynchronously
+      // 3. Apply artwork texture - optimize by only applying to active mode initially
+      // This significantly speeds up initial setup, especially for mirror mode
       if (artworkTexture) {
         const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const fullBleedLayer = allLayers.find(l => l.meshType === MODE_TYPES.FULL_BLEED);
@@ -1806,24 +1785,17 @@ export function useArtworkViewer({
         const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
         const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
         
-        // OPTIMIZATION: Don't await texture loading - let it happen in background
-        // Scene will render immediately, textures will appear as they load
+        // Apply to priority mode first (the one that will be visible)
         if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-          updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
-            if (process.env.NODE_ENV === 'development') {
-              console.warn('Failed to apply artwork texture to fullBleed:', err);
-            }
-          });
+          await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
         } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
-          updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
-            if (process.env.NODE_ENV === 'development') {
-              console.warn('Failed to apply artwork texture to shrunk:', err);
-            }
-          });
+          await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
         }
         
-        // Apply to the other mode in background (non-blocking)
+        // Defer applying to the other mode to avoid blocking
+        // This allows the scene to render faster while the other texture loads in the background
         if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
+          // Use setTimeout to defer, allowing browser to render first frame
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
               if (process.env.NODE_ENV === 'development') {
@@ -1842,13 +1814,9 @@ export function useArtworkViewer({
         }
       }
 
-      // 4. Apply frame texture if provided - NON-BLOCKING: load in background
+      // 4. Apply frame texture if provided
       if (frameTexture) {
-        updateFrame(frameTexture).catch(err => {
-          if (process.env.NODE_ENV === 'development') {
-            console.warn('Failed to apply frame texture:', err);
-          }
-        });
+        await updateFrame(frameTexture);
       }
 
       // 5. Set initial mode
@@ -1858,13 +1826,7 @@ export function useArtworkViewer({
 
       return true;
     } catch (error) {
-      // Enhanced error logging for deployment debugging
-      console.error("[Setup] Fatal error:", {
-        message: error?.message || error,
-        stack: error?.stack,
-        name: error?.name,
-        fullError: error,
-      });
+      console.error("Setup error:", error);
       throw error;
     }
   };
