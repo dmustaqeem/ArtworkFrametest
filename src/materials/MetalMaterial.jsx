@@ -561,13 +561,15 @@ export const applyMetalState = (model, renderer, state) => {
             mat.roughness = presetRoughness;
           }
           // Apply darker silver color for silver metal backgrounds
+          // Brighten non-silver metals for better visibility
           if (mat.color) {
             if (isSilverMetalBackground) {
               // Darker silver color - darker grey with slight blue tint
               mat.color.setRGB(0.5, 0.5, 0.52); // Darker silver shade
             } else if (orig.color) {
-              // For other metals, preserve original color
+              // For other metals, brighten original color by 1.6x for better visibility
               mat.color.copy(orig.color);
+              mat.color.multiplyScalar(1.6); // Brighten by 60% for better visibility
             }
           }
           
@@ -862,8 +864,12 @@ export const updateMetalColor = (model, metalColor) => {
               finishPreset.colorWhiteMetal.g,
               finishPreset.colorWhiteMetal.b
             );
+            // Brighten white metal for better visibility
+            mat.color.multiplyScalar(1.6);
           } else {
+            // For non-white metals, brighten color for better visibility
             mat.color.copy(color);
+            mat.color.multiplyScalar(1.6); // Brighten by 60% for better visibility
           }
           mat.needsUpdate = true;
         }

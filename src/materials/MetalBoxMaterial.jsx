@@ -420,8 +420,12 @@ export const updateMetalBoxColor = (model, metalColor) => {
               finishPreset.colorWhiteMetal.g,
               finishPreset.colorWhiteMetal.b
             );
+            // Brighten white metal for better visibility (matching MetalMaterial)
+            mat.color.multiplyScalar(1.6);
           } else {
+            // For non-white metals, brighten color for better visibility (matching MetalMaterial)
             mat.color.copy(color);
+            mat.color.multiplyScalar(1.6); // Brighten by 60% for better visibility
           }
           mat.needsUpdate = true;
         }

@@ -16,11 +16,9 @@ export class ModelManager {
     
     // Configure DRACOLoader for Draco-compressed models
     this.dracoLoader = new DRACOLoader();
-    // Use CDN for draco decoder files (works offline after first load)
-    // Google's CDN is reliable and caches well
-    this.dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
-    // Alternative: Use jsdelivr CDN if Google's CDN is blocked
-    // this.dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/');
+    // Use local DRACO decoder files from public/assets (no network request needed)
+    // This eliminates CDN loading delays and works offline immediately
+    this.dracoLoader.setDecoderPath('/assets/draco/gltf/');
     this.loader.setDRACOLoader(this.dracoLoader);
   }
 

@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Three.js Art Frame Test - React</title>
+    
+    <!-- Preconnect to improve network performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+    
+    <!-- Preload critical assets for faster initial load -->
+    <!-- DRACO decoder files are loaded first to avoid blocking model loading -->
+    <link rel="preload" href="/assets/draco/gltf/draco_decoder.js" as="script" crossorigin />
+    <link rel="preload" href="/assets/draco/gltf/draco_decoder.wasm" as="fetch" crossorigin />
   </head>
   <body>
     <div id="root"></div>

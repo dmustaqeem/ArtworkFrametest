@@ -1581,6 +1581,8 @@ export function useArtworkViewer({
               meshVisibilityHook.setMeshes(meshList);
 
               // Process materials (this creates texture layers)
+              // NOTE: Must be synchronous - materials need to be fully processed before rendering
+              // to avoid shader compilation errors (e.g., missing material.ior property)
               const processOptions = {
                 materialType: activeMaterialType,
                 metalFinish: lighting.metalFinish,
@@ -1770,8 +1772,8 @@ export function useArtworkViewer({
         }
       }
 
-      // 3. Apply artwork texture - optimize by only applying to active mode initially
-      // This significantly speeds up initial setup, especially for mirror mode
+      // 3. Apply artwork texture - NON-BLOCKING: load in background, don't await
+      // This allows setup to complete immediately while textures load asynchronously
       if (artworkTexture) {
         const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const fullBleedLayer = allLayers.find(l => l.meshType === MODE_TYPES.FULL_BLEED);
@@ -1785,17 +1787,24 @@ export function useArtworkViewer({
         const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
         const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
         
-        // Apply to priority mode first (the one that will be visible)
+        // OPTIMIZATION: Don't await texture loading - let it happen in background
+        // Scene will render immediately, textures will appear as they load
         if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-          await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
+          updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Failed to apply artwork texture to fullBleed:', err);
+            }
+          });
         } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
-          await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
+          updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Failed to apply artwork texture to shrunk:', err);
+            }
+          });
         }
         
-        // Defer applying to the other mode to avoid blocking
-        // This allows the scene to render faster while the other texture loads in the background
+        // Apply to the other mode in background (non-blocking)
         if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-          // Use setTimeout to defer, allowing browser to render first frame
           setTimeout(() => {
             updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
               if (process.env.NODE_ENV === 'development') {
@@ -1814,9 +1823,13 @@ export function useArtworkViewer({
         }
       }
 
-      // 4. Apply frame texture if provided
+      // 4. Apply frame texture if provided - NON-BLOCKING: load in background
       if (frameTexture) {
-        await updateFrame(frameTexture);
+        updateFrame(frameTexture).catch(err => {
+          if (process.env.NODE_ENV === 'development') {
+            console.warn('Failed to apply frame texture:', err);
+          }
+        });
       }
 
       // 5. Set initial mode
