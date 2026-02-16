@@ -41,9 +41,9 @@ export default defineConfig({
   },
   // Improve build performance
   esbuild: {
-    // Drop console.log in production, but keep console.error and console.warn for debugging
-    // This allows error logging in production while removing debug logs
-    drop: process.env.NODE_ENV === 'production' ? ['console.log', 'console.debug'] : [],
+    // Don't drop console in production - we need console.error and console.warn for debugging
+    // If you want to remove console.log, use a plugin like vite-plugin-remove-console
+    // drop: process.env.NODE_ENV === 'production' ? ['console'] : [],
     // Target modern browsers for smaller bundle
     target: 'es2020',
   },
