@@ -41,8 +41,9 @@ export default defineConfig({
   },
   // Improve build performance
   esbuild: {
-    // Drop console.log in production
-    drop: process.env.NODE_ENV === 'production' ? ['console'] : [],
+    // Drop console.log in production, but keep console.error and console.warn for debugging
+    // This allows error logging in production while removing debug logs
+    drop: process.env.NODE_ENV === 'production' ? ['console.log', 'console.debug'] : [],
     // Target modern browsers for smaller bundle
     target: 'es2020',
   },

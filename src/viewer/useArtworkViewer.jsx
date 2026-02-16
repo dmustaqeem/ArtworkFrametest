@@ -1561,7 +1561,9 @@ export function useArtworkViewer({
             finalModelPath,
             (loadedModel, boundingBox) => {
               if (!materialProcessorRef.current) {
-                reject(new Error("MaterialProcessor not initialized"));
+                const err = new Error("MaterialProcessor not initialized");
+                console.error("[Setup] MaterialProcessor error:", err);
+                reject(err);
                 return;
               }
 
@@ -1685,7 +1687,15 @@ export function useArtworkViewer({
 
               resolve();
             },
-            reject
+            (error) => {
+              // Enhanced error logging for deployment debugging
+              console.error("[Setup] Model load error:", {
+                path: finalModelPath,
+                error: error?.message || error,
+                fullError: error,
+              });
+              reject(error);
+            }
           );
         });
       } else if (newMaterialType) {
@@ -1763,12 +1773,14 @@ export function useArtworkViewer({
             }
           },
           (error) => {
-            if (process.env.NODE_ENV === 'development') {
-              console.warn('[HDRI SETUP] HDRI loading failed:', {
-                hdriToLoad,
-                error,
-              });
-            }
+            // Always log HDRI errors (not just in dev) for debugging deployment issues
+            console.error('[HDRI SETUP] HDRI loading failed:', {
+              hdriToLoad,
+              error,
+              errorMessage: error?.message || error,
+            });
+            // Don't throw - allow scene to render without HDRI
+            // Materials will use fallback or scene.environment
           }
         );
       } else {
@@ -1846,7 +1858,13 @@ export function useArtworkViewer({
 
       return true;
     } catch (error) {
-      console.error("Setup error:", error);
+      // Enhanced error logging for deployment debugging
+      console.error("[Setup] Fatal error:", {
+        message: error?.message || error,
+        stack: error?.stack,
+        name: error?.name,
+        fullError: error,
+      });
       throw error;
     }
   };
