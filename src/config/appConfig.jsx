@@ -11,6 +11,22 @@
 // =========================
 // MODEL & ASSET PATHS
 // =========================
+
+// Cache busting version - increment this when assets are updated to force browser refresh
+// Format: YYYYMMDD (e.g., 20240216)
+const ASSET_VERSION = "20240216";
+
+/**
+ * Add cache-busting query parameter to asset path
+ * @param {string} path - Asset path
+ * @returns {string} Path with version query parameter
+ */
+const addCacheBuster = (path) => {
+  if (!path) return path;
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}v=${ASSET_VERSION}`;
+};
+
 export const MODEL_PATHS = {
   GLB: "/assets/models/Acrylic/Acrylic_450x675.glb",
   HDRI: "/assets/hdr/studio1.hdr",
@@ -23,12 +39,13 @@ export const MODEL_PATHS = {
 };
 
 /**
- * Get HDRI path based on material type
+ * Get HDRI path based on material type (with cache busting)
  * @param {string} materialType - Material type
- * @returns {string} HDRI path
+ * @returns {string} HDRI path with version query parameter
  */
 export const getHDRIPath = (materialType) => {
-  return materialType === "MIRROR" ? MODEL_PATHS.HDRI_MIRROR : MODEL_PATHS.HDRI;
+  const basePath = materialType === "MIRROR" ? MODEL_PATHS.HDRI_MIRROR : MODEL_PATHS.HDRI;
+  return addCacheBuster(basePath);
 };
 
 /**
@@ -92,18 +109,21 @@ export const getModelPath = (orientation, materialType, metalFinish = "brushed_s
   const materialFolder = materialFolderMap[internalType] || materialFolderMap.ACRYLIC;
   
   // Map internal types to model file names
+  // NOTE: Landscape/Wood uses "Wood_Print.glb" instead of "Wood_450x675.glb"
   const modelFileMap = {
     ACRYLIC: "Acrylic_450x675.glb",
     METAL: finish === "white" ? "Metal_White_450x675.glb" : "Metal_Silver_450x675.glb",
     METAL_BOX: finish === "white" ? "Metal_Box_White_450x675.glb" : "Metal_Box_Silver_450x675.glb",
-    WOOD: "Wood_450x675.glb",
+    WOOD: orientationFolder === "Landscape" ? "Wood_Print.glb" : "Wood_450x675.glb", // Landscape uses different filename
     MIRROR: "Mirror_450x675.glb",
   };
   
   const modelFile = modelFileMap[internalType] || modelFileMap.ACRYLIC;
   
   // Construct path: /assets/models/{orientation}/{materialFolder}/{modelFile}
-  return `/assets/models/${orientationFolder}/${materialFolder}/${modelFile}`;
+  const basePath = `/assets/models/${orientationFolder}/${materialFolder}/${modelFile}`;
+  // Add cache-busting query parameter to ensure updated models are loaded
+  return addCacheBuster(basePath);
 };
 
 /**
