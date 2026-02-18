@@ -200,7 +200,8 @@ await viewerRef.current?.setup({
   modelPath: modelFile,         // Optional: Custom model path (auto-selected if not provided)
   frameTexture: frameUrl,       // Optional: Path or blob URL to frame image
   mode: 'fullBleed',            // Optional: 'fullBleed' or 'shrunk' (default: 'fullBleed')
-  hdriPath: customHdriPath      // Optional: Custom HDRI path (auto-selected if not provided)
+  hdriPath: customHdriPath,     // Optional: Custom HDRI path (auto-selected if not provided)
+  size: { width: 600, height: 900 }  // Optional: Custom size (defaults: Portrait 450x675, Landscape 675x450)
 });
 ```
 
@@ -235,6 +236,18 @@ const handleSetup = async () => {
     materialType: 'METAL',
     modelPath: customModelPath,  // Override auto-selection
     mode: 'fullBleed'
+  });
+};
+```
+
+**With Custom Size:**
+```jsx
+const handleSetup = async () => {
+  await viewerRef.current?.setup({
+    artworkTexture: artworkUrl,
+    orientation: 'portrait',
+    materialType: 'ACRYLIC',
+    size: { width: 600, height: 900 }  // Custom size (default: 450x675 for portrait)
   });
 };
 ```
@@ -306,6 +319,271 @@ const handleMaterialChange = (type) => {
   viewerRef.current?.setMaterialType(type);
 };
 ```
+
+### 6. Update Texture by Identifier
+
+**`updateTexture(identifier, texturePath)`** - Update texture on a specific layer by identifier.
+
+```jsx
+await viewerRef.current?.updateTexture(identifier, textureUrl);
+```
+
+**Parameters:**
+- `identifier` (string) - Layer identifier. Can be:
+  - Mesh name (e.g., `'Artwork_FullBleed'`, `'Artwork_Shrunk'`)
+  - Mesh type: `'fullBleed'` or `'shrunk'`
+  - Layer ID
+- `texturePath` (string) - Path or URL to texture image
+
+**Returns:** Promise that resolves when texture is updated, or rejects if layer not found.
+
+**Example:**
+```jsx
+// Update texture on fullBleed layer
+await viewerRef.current?.updateTexture('fullBleed', '/new-texture.jpg');
+
+// Update texture on specific mesh
+await viewerRef.current?.updateTexture('Artwork_Shrunk', '/new-texture.jpg');
+```
+
+### 7. Reset Texture
+
+**`resetTexture(layerId)`** - Reset a specific texture layer to its original texture.
+
+```jsx
+viewerRef.current?.resetTexture(layerId);
+```
+
+**Parameters:**
+- `layerId` (string) - Layer identifier (mesh name, mesh type, or layer ID)
+
+**Returns:** `true` if reset successful, `false` otherwise.
+
+**Example:**
+```jsx
+// Reset fullBleed layer to original texture
+viewerRef.current?.resetTexture('fullBleed');
+
+// Reset specific mesh
+viewerRef.current?.resetTexture('Artwork_Shrunk');
+```
+
+### 8. Reset Artwork
+
+**`resetArtwork(mode)`** - Reset artwork texture for a specific mode to its original.
+
+```jsx
+viewerRef.current?.resetArtwork(mode);
+```
+
+**Parameters:**
+- `mode` (string, optional) - Mode to reset (`'fullBleed'` or `'shrunk'`). If not provided, uses current mode.
+
+**Returns:** `true` if reset successful, `false` otherwise.
+
+**Example:**
+```jsx
+// Reset artwork for current mode
+viewerRef.current?.resetArtwork();
+
+// Reset artwork for specific mode
+viewerRef.current?.resetArtwork('fullBleed');
+```
+
+### 9. Reset All Textures
+
+**`resetAllTextures()`** - Reset all texture layers to their original textures.
+
+```jsx
+viewerRef.current?.resetAllTextures();
+```
+
+**Example:**
+```jsx
+// Reset all textures to original state
+viewerRef.current?.resetAllTextures();
+```
+
+### 10. Transform Texture
+
+**`transformTexture(layerId, transform, selectionRect)`** - Apply transform (translate, scale, rotate) to a texture layer.
+
+```jsx
+await viewerRef.current?.transformTexture(layerId, transform, selectionRect);
+```
+
+**Parameters:**
+- `layerId` (string) - Layer identifier (mesh name, mesh type, or layer ID)
+- `transform` (Object) - Transform parameters:
+  - `translateX` (number) - X translation in pixels
+  - `translateY` (number) - Y translation in pixels
+  - `scaleX` (number) - X scale factor
+  - `scaleY` (number) - Y scale factor
+  - `rotationDeg` (number) - Rotation in degrees
+- `selectionRect` (Object, optional) - Selection rectangle for cropping:
+  - `x` (number) - X position
+  - `y` (number) - Y position
+  - `width` (number) - Width
+  - `height` (number) - Height
+
+**Returns:** Promise that resolves when transform is applied.
+
+**Example:**
+```jsx
+// Apply transform to fullBleed layer
+await viewerRef.current?.transformTexture('fullBleed', {
+  translateX: 50,
+  translateY: -30,
+  scaleX: 1.2,
+  scaleY: 1.2,
+  rotationDeg: 45
+});
+
+// Apply transform with crop selection
+await viewerRef.current?.transformTexture('fullBleed', {
+  translateX: 0,
+  translateY: 0,
+  scaleX: 1.0,
+  scaleY: 1.0,
+  rotationDeg: 0
+}, {
+  x: 100,
+  y: 100,
+  width: 500,
+  height: 500
+});
+```
+
+### 11. Apply Texture Transform to All Layers
+
+**`applyTextureTransformToAllLayers(transform, selectionRect)`** - Apply the same transform to all texture layers.
+
+```jsx
+await viewerRef.current?.applyTextureTransformToAllLayers(transform, selectionRect);
+```
+
+**Parameters:**
+- `transform` (Object) - Transform parameters (same as `transformTexture`)
+- `selectionRect` (Object, optional) - Selection rectangle for cropping (same as `transformTexture`)
+
+**Returns:** Promise that resolves when all transforms are applied.
+
+**Example:**
+```jsx
+// Apply same transform to all layers
+await viewerRef.current?.applyTextureTransformToAllLayers({
+  translateX: 20,
+  translateY: 20,
+  scaleX: 1.1,
+  scaleY: 1.1,
+  rotationDeg: 5
+});
+```
+
+### 12. Export Texture from Canvas
+
+**`exportTextureFromCanvas(canvas, format, quality)`** - Export texture from a canvas element as a data URL.
+
+```jsx
+const dataUrl = viewerRef.current?.exportTextureFromCanvas(canvas, format, quality);
+```
+
+**Parameters:**
+- `canvas` (HTMLCanvasElement) - Canvas element to export
+- `format` (string, optional) - Image format. Default: `'image/png'`. Options: `'image/png'`, `'image/jpeg'`
+- `quality` (number, optional) - Quality for JPEG (0-1). Default: `1`. Only used for JPEG format.
+
+**Returns:** String - Data URL of the exported image.
+
+**Example:**
+```jsx
+// Export as PNG
+const canvas = document.createElement('canvas');
+// ... draw to canvas ...
+const pngDataUrl = viewerRef.current?.exportTextureFromCanvas(canvas);
+
+// Export as JPEG with quality
+const jpegDataUrl = viewerRef.current?.exportTextureFromCanvas(canvas, 'image/jpeg', 0.9);
+
+// Use the data URL (e.g., download or display)
+const link = document.createElement('a');
+link.href = pngDataUrl;
+link.download = 'texture.png';
+link.click();
+```
+
+### 13. Set Size During Setup
+
+**`setup(options)`** - The `setup` method accepts an optional `size` parameter to specify custom dimensions.
+
+```jsx
+await viewerRef.current?.setup({
+  artworkTexture: textureUrl,
+  orientation: 'portrait',  // or 'landscape'
+  materialType: 'ACRYLIC',
+  size: { width: 600, height: 900 }  // Optional: Custom size
+});
+```
+
+**Parameters:**
+- `size` (Object, optional) - Size object with `width` and `height` in pixels
+  - Default sizes:
+    - Portrait: `450x675`
+    - Landscape: `675x450`
+
+**Example:**
+```jsx
+// Setup with custom size
+await viewerRef.current?.setup({
+  artworkTexture: '/artwork.jpg',
+  orientation: 'portrait',
+  materialType: 'METAL',
+  size: { width: 600, height: 900 }
+});
+
+// Setup with default size (size not specified)
+await viewerRef.current?.setup({
+  artworkTexture: '/artwork.jpg',
+  orientation: 'portrait',
+  materialType: 'ACRYLIC'
+  // Uses default: 450x675 for portrait
+});
+```
+
+### 14. Rescale Model
+
+**`rescaleModel(sizeRatio)`** - Rescale the existing model based on size ratio without reloading. This preserves the model's rotation and position while only changing the scale.
+
+```jsx
+viewerRef.current?.rescaleModel(sizeRatio);
+```
+
+**Parameters:**
+- `sizeRatio` (Object) - Size ratio object:
+  - `widthRatio` (number) - Width ratio: `newWidth / defaultWidth`
+  - `heightRatio` (number) - Height ratio: `newHeight / defaultHeight`
+
+**Returns:** No return value. Model is rescaled in place.
+
+**Example:**
+```jsx
+// Calculate size ratio
+const orientation = 'portrait'; // or 'landscape'
+const defaultSize = orientation === 'portrait' 
+  ? { width: 450, height: 675 } 
+  : { width: 675, height: 450 };
+
+const newSize = { width: 600, height: 900 };
+const sizeRatio = {
+  widthRatio: newSize.width / defaultSize.width,   // 600/450 = 1.33
+  heightRatio: newSize.height / defaultSize.height // 900/675 = 1.33
+};
+
+// Rescale the model in real-time
+viewerRef.current?.rescaleModel(sizeRatio);
+```
+
+**Note:** This method is ideal for updating the model size after it's been loaded, as it doesn't require reloading the model and preserves all transformations.
 
 ## Complete Example
 
@@ -458,4 +736,4 @@ import { createSceneManager } from "./managers/index.jsx";
 
 ---
 
-**That's it!** These 5 methods are all you need to get started.
+**Getting Started:** The first 5 methods (`setup`, `updateArtwork`, `updateFrame`, `setMode`, `setMaterialType`) are all you need for basic usage. Additional methods (6-12) provide advanced texture management and transformation capabilities.

@@ -44,10 +44,17 @@ export default function TextureTransformModal({
   const originalSourceImageRef = useRef(null); // Store the original source image URL/data for restoration
   const testTexture1Ref = useRef(null);
   const testTexture2Ref = useRef(null);
+  const isInitializedRef = useRef(false); // Track if modal has been initialized to prevent re-initialization
 
   // Mouse interaction state
   const [isDragging, setIsDragging] = useState(null);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0, transform: null });
+  const isDraggingRef = useRef(null);
+  const dragStartRef = useRef({ x: 0, y: 0, transform: null });
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
 
   // Load test textures for fallback
   useEffect(() => {
@@ -480,114 +487,217 @@ export default function TextureTransformModal({
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
 
-    setIsDragging(interactionType);
-    setDragStart({
+    // Store drag start in ref to ensure it's always current
+    dragStartRef.current = {
       x,
       y,
-      transform: { ...textureTransform },
-    });
+      transform: { ...textureTransformRef.current },
+    };
+    
+    setIsDragging(interactionType);
   };
 
-  const handleMouseMove = (e) => {
-    if (!isDragging || !canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-
-    // Convert display coordinates to canvas pixel coordinates
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
-    const deltaX = x - dragStart.x;
-    const deltaY = y - dragStart.y;
-
-    let newTransform = { ...dragStart.transform };
-
-    if (isDragging === 'pan') {
-      // Pan: move image
-      newTransform.translateX += deltaX;
-      newTransform.translateY += deltaY;
-    } else if (isDragging.startsWith('corner-')) {
-      // Corner drag: scale both axes
-      const sel = selectionRectRef.current;
-      const centerX = sel.x + sel.width / 2;
-      const centerY = sel.y + sel.height / 2;
-
-      const startDist = Math.sqrt(
-        Math.pow(dragStart.x - centerX, 2) + Math.pow(dragStart.y - centerY, 2)
-      );
-      const currentDist = Math.sqrt(
-        Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2)
-      );
-
-      if (startDist > 0.01) {
-        const scaleFactor = currentDist / startDist;
-        newTransform.scaleX = Math.max(0.1, Math.min(5, dragStart.transform.scaleX * scaleFactor));
-        newTransform.scaleY = Math.max(0.1, Math.min(5, dragStart.transform.scaleY * scaleFactor));
-      }
-    } else if (isDragging.startsWith('edge-')) {
-      // Edge drag: scale one axis
-      const sel = selectionRectRef.current;
-      const centerX = sel.x + sel.width / 2;
-      const centerY = sel.y + sel.height / 2;
-
-      if (isDragging === 'edge-top' || isDragging === 'edge-bottom') {
-        const startDistY = Math.abs(dragStart.y - centerY);
-        const currentDistY = Math.abs(y - centerY);
-        if (startDistY > 0.01) {
-          const scaleFactor = currentDistY / startDistY;
-          newTransform.scaleY = Math.max(0.1, Math.min(5, dragStart.transform.scaleY * scaleFactor));
-        }
-      } else if (isDragging === 'edge-left' || isDragging === 'edge-right') {
-        const startDistX = Math.abs(dragStart.x - centerX);
-        const currentDistX = Math.abs(x - centerX);
-        if (currentDistX > 0.01) {
-          const scaleFactor = currentDistX / startDistX;
-          newTransform.scaleX = Math.max(0.1, Math.min(5, dragStart.transform.scaleX * scaleFactor));
-        }
-      }
-    } else if (isDragging === 'rotate') {
-      // Rotate: angle from center
-      const sel = selectionRectRef.current;
-      const centerX = sel.x + sel.width / 2;
-      const centerY = sel.y + sel.height / 2;
-
-      const startAngle = Math.atan2(dragStart.y - centerY, dragStart.x - centerX);
-      const currentAngle = Math.atan2(y - centerY, x - centerX);
-      const deltaAngle = ((currentAngle - startAngle) * 180) / Math.PI;
-
-      newTransform.rotationDeg = dragStart.transform.rotationDeg + deltaAngle;
-    }
-
-    setTextureTransform(newTransform);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(null);
-  };
+  // handleMouseMove and handleMouseUp are now defined inline in the useEffect
+  // to avoid dependency issues and ensure smooth dragging
 
   // Global mouse event listeners
+  // Use refs to avoid recreating listeners on every transform change
+  const textureTransformRef = useRef(textureTransform);
+  useEffect(() => {
+    textureTransformRef.current = textureTransform;
+  }, [textureTransform]);
+
   useEffect(() => {
     if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      const handleMove = (e) => {
+        if (!canvasRef.current) return;
+        
+        // Get current drag type from ref (not closure)
+        const currentDragType = isDraggingRef.current;
+        if (!currentDragType) return; // Drag ended
+
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+
+        // Convert display coordinates to canvas pixel coordinates
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
+        
+        // Use ref to get current drag start values
+        const dragStart = dragStartRef.current;
+        const deltaX = x - dragStart.x;
+        const deltaY = y - dragStart.y;
+
+        let newTransform = { ...dragStart.transform };
+
+        if (currentDragType === 'pan') {
+          // Pan: move image
+          newTransform.translateX += deltaX;
+          newTransform.translateY += deltaY;
+        } else if (currentDragType.startsWith('corner-')) {
+          // Corner drag: scale both axes proportionally
+          const sel = selectionRectRef.current;
+          const centerX = sel.x + sel.width / 2;
+          const centerY = sel.y + sel.height / 2;
+
+          const startDist = Math.sqrt(
+            Math.pow(dragStart.x - centerX, 2) + Math.pow(dragStart.y - centerY, 2)
+          );
+          const currentDist = Math.sqrt(
+            Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2)
+          );
+
+          if (startDist > 0.01) {
+            const scaleFactor = currentDist / startDist;
+            newTransform.scaleX = Math.max(0.1, Math.min(10, dragStart.transform.scaleX * scaleFactor));
+            newTransform.scaleY = Math.max(0.1, Math.min(10, dragStart.transform.scaleY * scaleFactor));
+          }
+        } else if (currentDragType.startsWith('edge-')) {
+          // Edge drag: scale one axis independently
+          const sel = selectionRectRef.current;
+          const centerX = sel.x + sel.width / 2;
+          const centerY = sel.y + sel.height / 2;
+
+          if (currentDragType === 'edge-top') {
+            // Top edge: scale based on distance from center (negative Y = up)
+            const startDistY = centerY - dragStart.y; // Distance from center to top edge
+            const currentDistY = centerY - y;
+            if (Math.abs(startDistY) > 0.01) {
+              const scaleFactor = currentDistY / startDistY;
+              newTransform.scaleY = Math.max(0.1, Math.min(10, dragStart.transform.scaleY * scaleFactor));
+            }
+          } else if (currentDragType === 'edge-bottom') {
+            // Bottom edge: scale based on distance from center (positive Y = down)
+            const startDistY = dragStart.y - centerY; // Distance from center to bottom edge
+            const currentDistY = y - centerY;
+            if (Math.abs(startDistY) > 0.01) {
+              const scaleFactor = currentDistY / startDistY;
+              newTransform.scaleY = Math.max(0.1, Math.min(10, dragStart.transform.scaleY * scaleFactor));
+            }
+          } else if (currentDragType === 'edge-left') {
+            // Left edge: scale based on distance from center (negative X = left)
+            const startDistX = centerX - dragStart.x; // Distance from center to left edge
+            const currentDistX = centerX - x;
+            if (Math.abs(startDistX) > 0.01) {
+              const scaleFactor = currentDistX / startDistX;
+              newTransform.scaleX = Math.max(0.1, Math.min(10, dragStart.transform.scaleX * scaleFactor));
+            }
+          } else if (currentDragType === 'edge-right') {
+            // Right edge: scale based on distance from center (positive X = right)
+            const startDistX = dragStart.x - centerX; // Distance from center to right edge
+            const currentDistX = x - centerX;
+            if (Math.abs(startDistX) > 0.01) {
+              const scaleFactor = currentDistX / startDistX;
+              newTransform.scaleX = Math.max(0.1, Math.min(10, dragStart.transform.scaleX * scaleFactor));
+            }
+          }
+        } else if (currentDragType === 'rotate') {
+          // Rotate: angle from center
+          const sel = selectionRectRef.current;
+          const centerX = sel.x + sel.width / 2;
+          const centerY = sel.y + sel.height / 2;
+
+          const startAngle = Math.atan2(dragStart.y - centerY, dragStart.x - centerX);
+          const currentAngle = Math.atan2(y - centerY, x - centerX);
+          const deltaAngle = ((currentAngle - startAngle) * 180) / Math.PI;
+
+          newTransform.rotationDeg = dragStart.transform.rotationDeg + deltaAngle;
+        }
+
+        setTextureTransform(newTransform);
+      };
+
+      const handleUp = () => {
+        // Ensure the transform state is persisted before clearing drag state
+        // The transform should already be set by the last handleMove call
+        setIsDragging(null);
+      };
+
+      window.addEventListener('mousemove', handleMove);
+      window.addEventListener('mouseup', handleUp);
       return () => {
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('mousemove', handleMove);
+        window.removeEventListener('mouseup', handleUp);
       };
     }
-  }, [isDragging, dragStart, textureTransform]);
+  }, [isDragging]);
 
   // Re-render canvas when transform changes
+  // Use requestAnimationFrame for smooth rendering during drag
+  const renderFrameRef = useRef(null);
   useEffect(() => {
     if (isOpen && imageRef.current) {
-      renderTextureTransform();
+      // Cancel any pending render
+      if (renderFrameRef.current) {
+        cancelAnimationFrame(renderFrameRef.current);
+      }
+      // Schedule render for next frame
+      renderFrameRef.current = requestAnimationFrame(() => {
+        renderTextureTransform();
+        renderFrameRef.current = null;
+      });
     }
+    return () => {
+      if (renderFrameRef.current) {
+        cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = null;
+      }
+    };
   }, [textureTransform, isOpen]);
+
+  // Listen for texture-loaded event to reload image when texture finishes loading
+  useEffect(() => {
+    const handleTextureLoaded = () => {
+      if (isOpen && textureLayers.length > 0) {
+        // Re-trigger the initialization effect
+        const mapLayer = textureLayers.find(layer => layer.mapType === 'map');
+        if (mapLayer && mapLayer.mesh) {
+          const mats = Array.isArray(mapLayer.mesh.material) ? mapLayer.mesh.material : [mapLayer.mesh.material];
+          const mat = mats[mapLayer.materialIndex];
+          if (mat && mat.map && mat.map.image instanceof HTMLImageElement) {
+            const imageElement = mat.map.image;
+            if (imageElement.complete && imageElement.naturalWidth > 0 && imageElement.src) {
+              const img = new Image();
+              // Only set crossOrigin for non-blob URLs
+              if (typeof imageElement.src === 'string' && !imageElement.src.startsWith('blob:') && !imageElement.src.startsWith('data:')) {
+                img.crossOrigin = 'anonymous';
+              }
+              img.onload = () => {
+                imageRef.current = img;
+                const canvas = canvasRef.current;
+                if (canvas) {
+                  initializeTextureTransform(img, canvas.width, canvas.height);
+                  renderTextureTransform();
+                }
+              };
+              img.onerror = () => {
+                if (process.env.NODE_ENV === 'development') {
+                  console.error('Failed to reload texture image');
+                }
+              };
+              img.src = imageElement.src;
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('texture-loaded', handleTextureLoaded);
+    return () => {
+      window.removeEventListener('texture-loaded', handleTextureLoaded);
+    };
+  }, [isOpen, textureLayers]);
 
   // Initialize when modal opens
   useEffect(() => {
+    // Don't initialize if currently dragging (use ref to get current value)
+    if (isDraggingRef.current) return;
+    
+    // Don't re-initialize if already initialized and modal is still open
+    if (isInitializedRef.current && isOpen) return;
+    
     if (isOpen && textureLayers.length > 0) {
       // Find a texture to use
       let textureToUse = null;
@@ -613,25 +723,43 @@ export default function TextureTransformModal({
       } else if (textureToUse && textureToUse.image) {
         // Extract image from texture
         if (textureToUse.image instanceof HTMLImageElement) {
-          if (textureToUse.image.complete && textureToUse.image.naturalWidth > 0) {
+          // Check if image is loaded and has valid dimensions
+          if (textureToUse.image.complete && textureToUse.image.naturalWidth > 0 && textureToUse.image.naturalHeight > 0) {
+            // Use the image source (can be blob URL, data URL, or regular URL)
             imageSrc = textureToUse.image.src;
+            // Verify the src is valid (not empty and is a valid URL/blob/data URL)
+            if (!imageSrc || imageSrc === '') {
+              imageSrc = testTexturePaths[0];
+            }
           } else {
-            // Wait for image to load
-            textureToUse.image.onload = () => {
-              if (isOpen) {
+            // Image not fully loaded yet - wait for it
+            const imageElement = textureToUse.image;
+            imageElement.onload = () => {
+              if (isOpen && imageElement.src) {
+                // Re-trigger the effect to load the image
                 const event = new Event('texture-loaded');
                 window.dispatchEvent(event);
               }
             };
-            // Use fallback for now
-            imageSrc = testTexturePaths[0];
+            // Use fallback for now, but will be replaced when image loads
+            imageSrc = imageElement.src || testTexturePaths[0];
           }
         } else if (textureToUse.image instanceof HTMLCanvasElement) {
-          imageSrc = textureToUse.image.toDataURL();
+          // For canvas, convert to data URL
+          try {
+            imageSrc = textureToUse.image.toDataURL('image/png');
+          } catch (error) {
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Failed to convert canvas to data URL:', error);
+            }
+            imageSrc = testTexturePaths[0];
+          }
         } else {
+          // Unknown image type, use fallback
           imageSrc = testTexturePaths[0];
         }
       } else {
+        // No texture found, use fallback
         imageSrc = testTexturePaths[0];
       }
 
@@ -641,8 +769,15 @@ export default function TextureTransformModal({
       }
 
       const img = new Image();
-      img.crossOrigin = 'anonymous';
+      // Only set crossOrigin for non-blob URLs (blob URLs are same-origin and don't need it)
+      // Setting crossOrigin on blob URLs can cause them to fail to load
+      if (typeof imageSrc === 'string' && !imageSrc.startsWith('blob:') && !imageSrc.startsWith('data:')) {
+        img.crossOrigin = 'anonymous';
+      }
       img.onload = () => {
+        // Don't reset if currently dragging (use ref to get current value)
+        if (isDraggingRef.current) return;
+        
         imageRef.current = img;
         const canvas = canvasRef.current;
         if (canvas) {
@@ -670,9 +805,36 @@ export default function TextureTransformModal({
             initializeTextureTransform(img, canvas.width, canvas.height);
           }
           renderTextureTransform();
+          isInitializedRef.current = true; // Mark as initialized
+        }
+      };
+      img.onerror = (error) => {
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Failed to load image in TextureTransformModal:', imageSrc, error);
+        }
+        // Try to use fallback texture
+        if (imageSrc !== testTexturePaths[0]) {
+          const fallbackImg = new Image();
+          fallbackImg.onload = () => {
+            imageRef.current = fallbackImg;
+            const canvas = canvasRef.current;
+            if (canvas) {
+              initializeTextureTransform(fallbackImg, canvas.width, canvas.height);
+              renderTextureTransform();
+            }
+          };
+          fallbackImg.onerror = () => {
+            if (process.env.NODE_ENV === 'development') {
+              console.error('Failed to load fallback texture');
+            }
+          };
+          fallbackImg.src = testTexturePaths[0];
         }
       };
       img.src = imageSrc;
+    } else if (!isOpen) {
+      // Reset initialization flag when modal closes
+      isInitializedRef.current = false;
     }
   }, [isOpen, textureLayers, testTexturePaths]);
 

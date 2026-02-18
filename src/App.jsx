@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
-import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES } from './config/appConfig.jsx';
+import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES, DEFAULT_SIZES, EXAMPLE_SIZES, formatSize } from './config/appConfig.jsx';
 import { TextureTransformModal } from './components/index.jsx';
 import './App.css';
 
@@ -14,6 +14,7 @@ function App() {
   const [reflectionIntensity, setReflectionIntensity] = useState(() => getDefaultReflectionIntensity('ACRYLIC'));
   const [glassVisible, setGlassVisible] = useState(true);
   const [isTextureTransformModalOpen, setIsTextureTransformModalOpen] = useState(false);
+  const [size, setSize] = useState(() => DEFAULT_SIZES.PORTRAIT);
   
   // File state - store File objects directly
   // Note: modelFile is no longer needed as models are loaded automatically based on material type
@@ -30,6 +31,50 @@ function App() {
   const [hdrUrl, setHdrUrl] = useState(null); // HDR URL for non-mirror materials
   const [hdrMirrorUrl, setHdrMirrorUrl] = useState(null); // HDR URL for mirror material
   const [backgroundUrl, setBackgroundUrl] = useState(null); // Background image URL
+
+  // Track if model is loaded to enable real-time size updates
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const previousSizeRef = useRef(size);
+
+  // Real-time size update effect - rescale model when size changes (without reloading)
+  useEffect(() => {
+    // Skip if model isn't loaded yet
+    if (!isModelLoaded || !viewerRef.current) {
+      return;
+    }
+    
+    // Skip if size hasn't actually changed
+    if (previousSizeRef.current.width === size.width && 
+        previousSizeRef.current.height === size.height) {
+      return;
+    }
+    
+    // Calculate size ratio
+    const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
+      ? DEFAULT_SIZES.PORTRAIT 
+      : DEFAULT_SIZES.LANDSCAPE;
+    
+    if (size.width && size.height) {
+      const sizeRatio = {
+        widthRatio: size.width / defaultSize.width,
+        heightRatio: size.height / defaultSize.height,
+      };
+      
+      // Rescale the existing model in real-time
+      if (viewerRef.current && typeof viewerRef.current.rescaleModel === 'function') {
+        try {
+          viewerRef.current.rescaleModel(sizeRatio);
+          setStatus(`Size updated to: ${formatSize(size)} (real-time)`);
+        } catch (error) {
+          console.error('[App] Error rescaling model:', error);
+          setStatus(`Size changed to: ${formatSize(size)} - Click "Setup Scene" to apply`);
+        }
+      }
+    }
+    
+    // Update previous size
+    previousSizeRef.current = size;
+  }, [size, isModelLoaded, orientation]);
 
   // Handle file uploads
   // Note: Model upload is no longer needed - models are loaded automatically based on material type
@@ -103,8 +148,8 @@ function App() {
       // Get material type info (convert display type to internal type)
       const { internalType } = getMaterialTypeInfo(materialType);
       
-      // Get model path based on orientation and material type (models are automatically loaded from assets)
-      const modelPath = getModelPath(orientation, materialType);
+      // Get model path based on orientation, material type, and size
+      const modelPath = getModelPath(orientation, materialType, undefined, size);
       
       // Determine which HDR to use based on material type
       // Pass File object directly - EnvironmentManager will handle it
@@ -123,6 +168,7 @@ function App() {
         frameTexture: frameUrl || undefined,
         hdriPath: customHdrPath, // Custom HDR path based on material type
         mode: currentMode,
+        size: size, // Size object with {width, height}
       });
       
       // Sync glass visibility after setup (if acrylic)
@@ -137,6 +183,8 @@ function App() {
       }
       
       setStatus('Scene ready!');
+      setIsModelLoaded(true); // Mark model as loaded
+      previousSizeRef.current = size; // Update previous size reference
     } catch (error) {
       if (process.env.NODE_ENV === 'development') {
         console.error('Setup error:', error);
@@ -201,9 +249,70 @@ function App() {
     setStatus(`Mode switched to: ${newMode}`);
   };
 
+  // Handle USDZ export
+  const [isExportingUSDZ, setIsExportingUSDZ] = useState(false);
+  const handleExportUSDZ = async () => {
+    if (!viewerRef.current) {
+      setStatus('Error: Viewer not initialized');
+      return;
+    }
+
+    if (typeof viewerRef.current.exportUSDZ !== 'function') {
+      setStatus('Error: USDZ export not available');
+      return;
+    }
+
+    setIsExportingUSDZ(true);
+    setStatus('Exporting to USDZ...');
+
+    try {
+      const filename = `artwork_${materialType.toLowerCase()}_${formatSize(size) || 'default'}.usdz`;
+      await viewerRef.current.exportUSDZ(filename);
+      setStatus('USDZ export completed!');
+    } catch (error) {
+      console.error('USDZ export error:', error);
+      setStatus(`Error exporting USDZ: ${error.message}`);
+    } finally {
+      setIsExportingUSDZ(false);
+    }
+  };
+
+  // Handle GLB export
+  const [isExportingGLB, setIsExportingGLB] = useState(false);
+  const handleExportGLB = async () => {
+    if (!viewerRef.current) {
+      setStatus('Error: Viewer not initialized');
+      return;
+    }
+
+    if (typeof viewerRef.current.exportGLB !== 'function') {
+      setStatus('Error: GLB export not available');
+      return;
+    }
+
+    setIsExportingGLB(true);
+    setStatus('Exporting to GLB...');
+
+    try {
+      const filename = `artwork_${materialType.toLowerCase()}_${formatSize(size) || 'default'}.glb`;
+      await viewerRef.current.exportGLB(filename);
+      setStatus('GLB export completed!');
+    } catch (error) {
+      console.error('GLB export error:', error);
+      setStatus(`Error exporting GLB: ${error.message}`);
+    } finally {
+      setIsExportingGLB(false);
+    }
+  };
+
   // Handle orientation change
   const handleOrientationChange = async (newOrientation) => {
     setOrientation(newOrientation);
+    // Update size to default for new orientation
+    const newDefaultSize = newOrientation === ORIENTATION_TYPES.PORTRAIT 
+      ? DEFAULT_SIZES.PORTRAIT 
+      : DEFAULT_SIZES.LANDSCAPE;
+    setSize(newDefaultSize);
     setStatus(`Orientation changed to: ${newOrientation}...`);
     
     // If artwork is already loaded, automatically call setup to reconfigure pipeline
@@ -216,7 +325,7 @@ function App() {
       setIsLoading(true);
       try {
         const { internalType } = getMaterialTypeInfo(materialType);
-        const newModelPath = getModelPath(newOrientation, materialType);
+        const newModelPath = getModelPath(newOrientation, materialType, undefined, newDefaultSize);
         const customHdrPath = internalType === 'MIRROR' 
           ? (hdrMirrorFile || undefined)
           : (hdrFile || undefined);
@@ -229,6 +338,7 @@ function App() {
           frameTexture: frameUrl || undefined,
           hdriPath: customHdrPath,
           mode: currentMode,
+          size: newDefaultSize,
         });
         
         const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
@@ -237,6 +347,8 @@ function App() {
         }
         
         setStatus(`Orientation changed to: ${newOrientation} - Scene reconfigured`);
+        setIsModelLoaded(true); // Mark model as loaded
+        previousSizeRef.current = newDefaultSize; // Update previous size reference
       } catch (error) {
         if (process.env.NODE_ENV === 'development') {
           console.error('Failed to reconfigure scene with new orientation:', error);
@@ -277,15 +389,14 @@ function App() {
       
       setIsLoading(true);
       try {
-        // Get new model path based on orientation and display type
-        const newModelPath = getModelPath(orientation, displayType);
+        // Get new model path based on orientation, display type, and size
+        const newModelPath = getModelPath(orientation, displayType, undefined, size);
         
         // Determine which HDR to use based on internal material type
         const customHdrPath = internalType === 'MIRROR' 
           ? (hdrMirrorFile || undefined)
           : (hdrFile || undefined);
         
-        console.log(`[Material Change] Automatically calling setup for ${displayType} (${internalType})`);
         
         // Automatically call setup to reconfigure the entire pipeline for the new material type
         // This ensures all material-specific configurations are properly applied
@@ -297,6 +408,7 @@ function App() {
           frameTexture: frameUrl || undefined,
           hdriPath: customHdrPath,
           mode: currentMode,
+          size: size,
         });
         
         // Update reflection intensity after setup (setup may reset it)
@@ -314,10 +426,9 @@ function App() {
           }
         }
         
-        if (process.env.NODE_ENV === 'development') {
-          console.log(`[Material Change] Setup completed successfully for ${displayType}`);
-        }
         setStatus(`Material changed to: ${displayType} - Scene reconfigured automatically`);
+        setIsModelLoaded(true); // Mark model as loaded
+        previousSizeRef.current = size; // Update previous size reference
       } catch (error) {
         if (process.env.NODE_ENV === 'development') {
           console.error('Failed to reconfigure scene with new material:', error);
@@ -392,7 +503,6 @@ function App() {
           ref={viewerRef}
           onReady={(api) => {
             if (process.env.NODE_ENV === 'development') {
-              console.log('Viewer ready!', api);
             }
             setStatus('Viewer ready - Upload artwork texture to start');
             // Use material-specific default reflection intensity for ACRYLIC and MIRROR
@@ -473,6 +583,9 @@ function App() {
             <div style={{ fontSize: '10px', color: '#aaa' }}>
               Material: {getMaterialTypeDisplayName(materialType)}
             </div>
+            <div style={{ fontSize: '10px', color: '#aaa' }}>
+              Size: {formatSize(size)}
+            </div>
           </div>
 
           {/* Artwork Texture Upload */}
@@ -528,60 +641,6 @@ function App() {
               </div>
             )}
           </div>
-
-          {/* HDR Environment Upload (Optional) */}
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
-              HDR Environment (Optional - for non-mirror materials)
-            </label>
-            <input
-              type="file"
-              accept=".hdr,.exr"
-              onChange={handleHdrUpload}
-              style={{
-                width: '100%',
-                padding: '8px',
-                fontSize: '11px',
-                backgroundColor: '#333',
-                color: 'white',
-                border: '1px solid #555',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            />
-            {hdrFile && (
-              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
-                ✓ {hdrFile.name}
-              </div>
-            )}
-          </div>
-
-          {/* Mirror HDR Environment Upload (Optional) */}
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
-              Mirror HDR Environment (Optional - for mirror material)
-            </label>
-            <input
-              type="file"
-              accept=".hdr,.exr"
-              onChange={handleHdrMirrorUpload}
-              style={{
-                width: '100%',
-                padding: '8px',
-                fontSize: '11px',
-                backgroundColor: '#333',
-                color: 'white',
-                border: '1px solid #555',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            />
-            {hdrMirrorFile && (
-              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
-                ✓ {hdrMirrorFile.name}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Orientation Selection */}
@@ -620,6 +679,87 @@ function App() {
             >
               Landscape
             </button>
+          </div>
+        </div>
+
+        {/* Size Selection */}
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Size</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            {(orientation === ORIENTATION_TYPES.PORTRAIT ? EXAMPLE_SIZES.PORTRAIT : EXAMPLE_SIZES.LANDSCAPE).map((sizeOption) => (
+              <button
+                key={sizeOption.label}
+                onClick={() => {
+                  const newSize = { width: sizeOption.width, height: sizeOption.height };
+                  setSize(newSize);
+                  // Status will be updated by useEffect if model is loaded
+                  if (!isModelLoaded) {
+                    setStatus(`Size changed to: ${sizeOption.label} - Click "Setup Scene" to apply`);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  backgroundColor: size.width === sizeOption.width && size.height === sizeOption.height ? '#4CAF50' : '#666',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  textAlign: 'left',
+                }}
+              >
+                {sizeOption.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+            <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '5px' }}>
+              Custom Size:
+            </div>
+            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+              <input
+                type="number"
+                placeholder="Width"
+                value={size.width || ''}
+                onChange={(e) => {
+                  const width = parseInt(e.target.value, 10);
+                  if (!isNaN(width) && width > 0) {
+                    setSize({ ...size, width });
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: '6px',
+                  fontSize: '11px',
+                  backgroundColor: '#333',
+                  color: 'white',
+                  border: '1px solid #555',
+                  borderRadius: '4px',
+                }}
+              />
+              <span style={{ color: '#aaa', fontSize: '11px' }}>x</span>
+              <input
+                type="number"
+                placeholder="Height"
+                value={size.height || ''}
+                onChange={(e) => {
+                  const height = parseInt(e.target.value, 10);
+                  if (!isNaN(height) && height > 0) {
+                    setSize({ ...size, height });
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: '6px',
+                  fontSize: '11px',
+                  backgroundColor: '#333',
+                  color: 'white',
+                  border: '1px solid #555',
+                  borderRadius: '4px',
+                }}
+              />
+            </div>
           </div>
         </div>
 
@@ -721,22 +861,6 @@ function App() {
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>Update Textures</h3>
           <button
-            onClick={handleUpdateArtwork}
-            disabled={isLoading || !artworkUrl}
-            style={{
-              width: '100%',
-              padding: '10px',
-              marginBottom: '5px',
-              backgroundColor: (!artworkUrl) ? '#555' : '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: (!artworkUrl) ? 'not-allowed' : 'pointer',
-            }}
-          >
-            Update Artwork
-          </button>
-          <button
             onClick={handleUpdateFrame}
             disabled={isLoading || !frameUrl}
             style={{
@@ -770,100 +894,53 @@ function App() {
           </button>
         </div>
 
-        {/* Mode Switch */}
+        {/* Export */}
         <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Export</h3>
           <button
-            onClick={handleSwitchMode}
-            disabled={isLoading}
+            onClick={handleExportUSDZ}
+            disabled={isLoading || isExportingUSDZ || isExportingGLB || !viewerRef.current || !isModelLoaded}
             style={{
               width: '100%',
               padding: '10px',
-              backgroundColor: '#2196F3',
+              marginBottom: '10px',
+              backgroundColor: (!viewerRef.current || !isModelLoaded || isExportingUSDZ || isExportingGLB) ? '#555' : '#9C27B0',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: isLoading ? 'not-allowed' : 'pointer',
+              cursor: (!viewerRef.current || !isModelLoaded || isExportingUSDZ || isExportingGLB) ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 'bold',
             }}
           >
-            Switch Mode ({currentMode === 'fullBleed' ? 'Shrunk' : 'Full Bleed'})
+            {isExportingUSDZ ? 'Exporting USDZ...' : 'Export to USDZ'}
           </button>
-        </div>
-
-        {/* Reflection Intensity Control */}
-        <div style={{ marginBottom: '20px' }}>
-          <h3 style={{ color: '#FFC107', marginTop: 0 }}>Reflection Intensity</h3>
+          <button
+            onClick={handleExportGLB}
+            disabled={isLoading || isExportingUSDZ || isExportingGLB || !viewerRef.current || !isModelLoaded}
+            style={{
+              width: '100%',
+              padding: '10px',
+              backgroundColor: (!viewerRef.current || !isModelLoaded || isExportingUSDZ || isExportingGLB) ? '#555' : '#2196F3',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (!viewerRef.current || !isModelLoaded || isExportingUSDZ || isExportingGLB) ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 'bold',
+            }}
+          >
+            {isExportingGLB ? 'Exporting GLB...' : 'Export to GLB'}
+          </button>
           <div style={{ 
-            padding: '10px', 
-            backgroundColor: 'rgba(255, 255, 255, 0.05)', 
-            borderRadius: '4px',
-            marginBottom: '10px'
+            fontSize: '10px', 
+            color: '#888', 
+            marginTop: '5px',
+            lineHeight: '1.4'
           }}>
-            <label style={{ 
-              display: 'block', 
-              marginBottom: '8px', 
-              fontSize: '11px',
-              color: '#aaa'
-            }}>
-              Intensity: {reflectionIntensity.toFixed(2)}
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.01"
-              value={reflectionIntensity}
-              onChange={(e) => handleReflectionIntensityChange(parseFloat(e.target.value))}
-              disabled={isLoading}
-              style={{
-                width: '100%',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-              }}
-            />
-            <div style={{ 
-              fontSize: '10px', 
-              color: '#888', 
-              marginTop: '5px',
-              lineHeight: '1.4'
-            }}>
-              Controls the intensity of environment map reflections on glass and reflective surfaces
-            </div>
+            Export the current 3D model to USDZ (AR) or GLB (3D) format
           </div>
         </div>
-
-        {/* Glass Visibility Control (Acrylic only) */}
-        {(() => {
-          const { internalType } = getMaterialTypeInfo(materialType);
-          return internalType === 'ACRYLIC';
-        })() && (
-          <div style={{ marginBottom: '20px' }}>
-            <h3 style={{ color: '#FFC107', marginTop: 0 }}>Glass Control</h3>
-            <button
-              onClick={handleToggleGlassVisibility}
-              disabled={isLoading}
-              style={{
-                width: '100%',
-                padding: '10px',
-                backgroundColor: glassVisible ? '#4CAF50' : '#666',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                fontSize: '12px',
-                fontWeight: 'bold',
-              }}
-            >
-              {glassVisible ? '✓ Glass Visible' : '✗ Glass Hidden'}
-            </button>
-            <div style={{ 
-              fontSize: '10px', 
-              color: '#888', 
-              marginTop: '5px',
-              lineHeight: '1.4'
-            }}>
-              Toggle glass layer visibility to test artwork sharpness
-            </div>
-          </div>
-        )}
 
         {/* Info */}
         <div

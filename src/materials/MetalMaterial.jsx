@@ -692,16 +692,15 @@ export const applyMetalState = (model, renderer, state) => {
             // ARTWORK LAYER PROPERTIES - NON-METALLIC FOR VIBRANCY
             // ============================================
             
-            // Increased metalness slightly for light source reflections while keeping colors vibrant
-            // Low metalness (0.15-0.2) allows light reflections without making artwork look dull
+            // Reduced metalness to minimize light source reflections while keeping some
+            // Low metalness (0.2) allows minimal light reflections without making artwork look dull
             if (mat.metalness !== undefined) {
-              mat.metalness = 0.55; // Slightly metallic for light reflections (increased from 0.18)
+              mat.metalness = 0.2; // Reduced from 0.55 - minimal light reflections
             }
             
-            // Reduce roughness for less matte appearance (more vibrant)
-            // roughness = 1.0 is too matte and makes artwork look dull
-            // Use moderate roughness (0.3-0.5) for better color vibrancy
-            mat.roughness = 0.4; // Moderate roughness - less matte, more vibrant
+            // Increased roughness for more matte appearance (reduces light reflections)
+            // Higher roughness (0.7) makes artwork less reflective to light sources but not completely matte
+            mat.roughness = 0.7; // Increased from 0.4 - reduces light reflections while maintaining vibrancy
             
             // Kill environment reflections WITHOUT removing envMap
             // Keep envMap intact for PBR (even if intensity is 0)

@@ -71,13 +71,59 @@ export const ORIENTATION_TYPES = {
 };
 
 /**
- * Get model path based on orientation and material type
+ * Default sizes for each orientation
+ */
+export const DEFAULT_SIZES = {
+  PORTRAIT: { width: 450, height: 675 },
+  LANDSCAPE: { width: 675, height: 450 },
+};
+
+/**
+ * Example sizes for demo purposes
+ */
+export const EXAMPLE_SIZES = {
+  PORTRAIT: [
+    { width: 450, height: 675, label: "450x675 (Default)" },
+    { width: 300, height: 450, label: "300x450" },
+    { width: 600, height: 900, label: "600x900" },
+  ],
+  LANDSCAPE: [
+    { width: 675, height: 450, label: "675x450 (Default)" },
+    { width: 900, height: 600, label: "900x600" },
+    { width: 1200, height: 800, label: "1200x800" },
+  ],
+};
+
+/**
+ * Format size as string (e.g., "450x675")
+ */
+export const formatSize = (size) => {
+  if (!size || !size.width || !size.height) return null;
+  return `${size.width}x${size.height}`;
+};
+
+/**
+ * Parse size string (e.g., "450x675" -> {width: 450, height: 675})
+ */
+export const parseSize = (sizeString) => {
+  if (!sizeString || typeof sizeString !== 'string') return null;
+  const parts = sizeString.split('x');
+  if (parts.length !== 2) return null;
+  const width = parseInt(parts[0], 10);
+  const height = parseInt(parts[1], 10);
+  if (isNaN(width) || isNaN(height)) return null;
+  return { width, height };
+};
+
+/**
+ * Get model path based on orientation, material type, and size
  * @param {string} orientation - Orientation type ('portrait' or 'landscape')
  * @param {string} materialType - Material type (can be display type like METAL_SILVER or internal type like METAL)
  * @param {string} metalFinish - Optional metal finish (brushed_silver or white) - defaults to brushed_silver
+ * @param {Object} size - Optional size object with {width, height} - defaults to default size for orientation
  * @returns {string} Model path
  */
-export const getModelPath = (orientation, materialType, metalFinish = "brushed_silver") => {
+export const getModelPath = (orientation, materialType, metalFinish = "brushed_silver", size = null) => {
   // Validate orientation
   if (!orientation || (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE)) {
     throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
@@ -108,14 +154,24 @@ export const getModelPath = (orientation, materialType, metalFinish = "brushed_s
   
   const materialFolder = materialFolderMap[internalType] || materialFolderMap.ACRYLIC;
   
+  // IMPORTANT: Always use default size for model file names
+  // Model files only exist in default sizes (450x675 for portrait, 675x450 for landscape)
+  // The size parameter is for artwork/texture dimensions, not model dimensions
+  const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
+    ? DEFAULT_SIZES.PORTRAIT 
+    : DEFAULT_SIZES.LANDSCAPE;
+  const sizeString = formatSize(defaultSize);
+  
   // Map internal types to model file names
-  // NOTE: Landscape/Wood uses "Wood_Print.glb" instead of "Wood_450x675.glb"
+  // NOTE: Landscape/Wood uses "Wood_Print.glb" instead of "Wood_675x450.glb"
   const modelFileMap = {
-    ACRYLIC: "Acrylic_450x675.glb",
-    METAL: finish === "white" ? "Metal_White_450x675.glb" : "Metal_Silver_450x675.glb",
-    METAL_BOX: finish === "white" ? "Metal_Box_White_450x675.glb" : "Metal_Box_Silver_450x675.glb",
-    WOOD: orientationFolder === "Landscape" ? "Wood_Print.glb" : "Wood_450x675.glb", // Landscape uses different filename
-    MIRROR: "Mirror_450x675.glb",
+    ACRYLIC: `Acrylic_${sizeString}.glb`,
+    METAL: finish === "white" ? `Metal_White_${sizeString}.glb` : `Metal_Silver_${sizeString}.glb`,
+    METAL_BOX: finish === "white" ? `Metal_Box_White_${sizeString}.glb` : `Metal_Box_Silver_${sizeString}.glb`,
+    WOOD: orientationFolder === "Landscape" 
+      ? "Wood_Print.glb" // Special case for landscape wood
+      : `Wood_${sizeString}.glb`,
+    MIRROR: `Mirror_${sizeString}.glb`,
   };
   
   const modelFile = modelFileMap[internalType] || modelFileMap.ACRYLIC;

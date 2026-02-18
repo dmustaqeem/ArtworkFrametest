@@ -20,11 +20,12 @@ import {
   useMaterialUpdates,
 } from "../hooks/index.jsx";
 import { useTextureOperations } from "../hooks/useTextureOperations.jsx";
-import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG, MODEL_PATHS, getModelPath, getHDRIPath, getMaterialTypeInfo, ORIENTATION_TYPES, getDefaultReflectionIntensity } from "../config/appConfig.jsx";
+import { SCENE_CONFIG, MATERIAL_CONFIG, TEXTURE_CONFIG, MODEL_PATHS, getModelPath, getHDRIPath, getMaterialTypeInfo, ORIENTATION_TYPES, getDefaultReflectionIntensity, DEFAULT_SIZES } from "../config/appConfig.jsx";
 import { TextureManager } from "../managers/TextureManager.jsx";
 import { findArtworkTextureLayer, findTextureLayer, getTextureLayersForMode } from "../utils/textureUtils.jsx";
 import { getArtworkMeshForMode, MODE_TYPES } from "../utils/meshUtils.jsx";
-import { exportModelToUSDZ } from "../utils/usdzUtils.jsx";
+import { exportModelToUSDZ, exportModelToUSDZBlob } from "../utils/usdzUtils.jsx";
+import { exportModelToGLB, exportModelToGLBBlob } from "../utils/glbUtils.jsx";
 import { applyTextureTransform, exportTextureFromCanvas } from "../utils/textureTransformUtils.jsx";
 import { snapshotOriginalMetal } from "../materials/MetalMaterial.jsx";
 import { applyMirrorState } from "../materials/MirrorMaterial.jsx";
@@ -1459,6 +1460,7 @@ export function useArtworkViewer({
       frameTexture,
       hdriPath: customHdriPath, // Custom HDR path (optional)
       mode: initialMode = MODE_TYPES.FULL_BLEED,
+      size, // Optional size object with {width, height}
     } = options;
 
     try {
@@ -1483,14 +1485,27 @@ export function useArtworkViewer({
       // 1. Set material type first (before model load if needed)
       materialType.setSelectedMaterialType(newMaterialType);
 
-      // 2. Auto-select model path based on orientation and material type if not provided
+      // 2. Auto-select model path based on orientation, material type, and size if not provided
       let finalModelPath = newModelPath;
       if (!finalModelPath) {
         // getModelPath now requires orientation and accepts both display types (METAL_SILVER) and internal types (METAL)
-        finalModelPath = getModelPath(orientation, newMaterialType);
+        // Also accepts optional size parameter (but model files always use default size)
+        finalModelPath = getModelPath(orientation, newMaterialType, undefined, size);
         if (!finalModelPath) {
           throw new Error(`Could not determine model path for orientation: ${orientation}, material type: ${newMaterialType}`);
         }
+      }
+
+      // Calculate size ratio for model scaling if size is provided
+      let sizeRatio = null;
+      if (size && size.width && size.height) {
+        const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
+          ? DEFAULT_SIZES.PORTRAIT 
+          : DEFAULT_SIZES.LANDSCAPE;
+        sizeRatio = {
+          widthRatio: size.width / defaultSize.width,
+          heightRatio: size.height / defaultSize.height,
+        };
       }
 
       // 3. Load/reload model
@@ -1683,7 +1698,8 @@ export function useArtworkViewer({
 
               resolve();
             },
-            reject
+            reject,
+            sizeRatio // Pass size ratio for model scaling
           );
         });
       } else if (newMaterialType) {
@@ -1937,7 +1953,7 @@ export function useArtworkViewer({
     // ============================================
     /**
      * Setup - Initialize everything with artwork, orientation, material type, and optional frame
-     * Model path is automatically selected based on orientation and material type
+     * Model path is automatically selected based on orientation, material type, and size
      * 
      * @param {Object} options
      * @param {string} options.artworkTexture - REQUIRED: Path or URL to artwork texture (applied to both fullBleed and shrunk)
@@ -1947,12 +1963,14 @@ export function useArtworkViewer({
      * @param {string} options.frameTexture - Optional: Path to frame texture (for shrunk mode)
      * @param {string} options.mode - Optional: Initial mode ('fullBleed' or 'shrunk', default: 'fullBleed')
      * @param {string} options.hdriPath - Optional: Custom HDRI path (auto-selected based on material type if not provided)
+     * @param {Object} options.size - Optional: Size object with {width, height} (defaults: Portrait 450x675, Landscape 675x450)
      * 
      * @example
      * await viewerRef.current.setup({
      *   artworkTexture: '/path/to/artwork.jpg',
      *   orientation: 'portrait',
-     *   materialType: 'ACRYLIC'
+     *   materialType: 'ACRYLIC',
+     *   size: { width: 450, height: 675 }
      * });
      */
     setup,
@@ -2623,7 +2641,394 @@ export function useArtworkViewer({
       if (!model) {
         throw new Error("No model loaded");
       }
-      return exportModelToUSDZ(model, filename, options);
+
+      // Ensure visibility relationships are applied based on current mode
+      // This ensures meshes are correctly marked as visible/invisible
+      if (meshVisibilityManagerRef.current) {
+        meshVisibilityManagerRef.current.applyVisibilityRelationships();
+      }
+
+      // Get visible meshes based on current mode
+      const meshes = meshVisibilityManagerRef.current?.getMeshes() || [];
+      const visibleMeshNames = new Set();
+      
+      // Collect names of all visible meshes (including acrylic emissive base layers - they'll be converted to standard white materials)
+      meshes.forEach((meshInfo) => {
+        if (meshInfo.visible && meshInfo.mesh) {
+          // Store the mesh name (include acrylic emissive base layers - they'll be converted for USDZ)
+          if (meshInfo.mesh.name) {
+            visibleMeshNames.add(meshInfo.mesh.name);
+          }
+          // Include children of visible meshes (including acrylic emissive base layers)
+          if (meshInfo.mesh.traverse) {
+            meshInfo.mesh.traverse((child) => {
+              if (child.isMesh && child.name) {
+                visibleMeshNames.add(child.name);
+              }
+            });
+          }
+        }
+      });
+
+      // Clone the model
+      let clonedModel;
+      try {
+        clonedModel = model.clone(true);
+      } catch (error) {
+        throw new Error(`Failed to clone model: ${error.message}`);
+      }
+
+      if (!clonedModel) {
+        throw new Error("Model clone failed - cloned model is undefined");
+      }
+
+      if (!clonedModel.traverse) {
+        throw new Error("Cloned model does not have traverse method");
+      }
+
+      // Remove invisible meshes from the cloned model
+      // We need to collect meshes to remove first, then remove them (can't modify during traversal)
+      // Note: Acrylic emissive base layers are kept but will be converted to standard white materials in usdzUtils
+      const meshesToRemove = [];
+      clonedModel.traverse((obj) => {
+        if (obj.isMesh) {
+          // Check if this mesh should be visible by name
+          const shouldBeVisible = obj.name && visibleMeshNames.has(obj.name);
+          if (!shouldBeVisible) {
+            meshesToRemove.push(obj);
+          }
+        }
+      });
+
+      // Remove invisible meshes
+      meshesToRemove.forEach((mesh) => {
+        if (mesh.parent) {
+          mesh.parent.remove(mesh);
+        }
+      });
+
+      // Also remove empty groups/objects that have no visible children
+      const removeEmptyObjects = (object) => {
+        if (!object || !object.children) return;
+        
+        const childrenToRemove = [];
+        // Create a copy of children array since we'll be modifying it
+        const children = [...object.children];
+        children.forEach((child) => {
+          removeEmptyObjects(child);
+          // Remove if it's an empty group or object (no meshes or all meshes removed)
+          if (child.children && child.children.length === 0 && !child.isMesh) {
+            childrenToRemove.push(child);
+          }
+        });
+        childrenToRemove.forEach((child) => {
+          if (object.remove) {
+            object.remove(child);
+          }
+        });
+      };
+      
+      removeEmptyObjects(clonedModel);
+
+      return exportModelToUSDZ(clonedModel, filename, options);
+    },
+
+    // ============================================
+    // GLB EXPORT
+    // ============================================
+    exportGLB: async (filename = "model.glb", options = {}) => {
+      const model = modelManagerRef.current?.getModel();
+      if (!model) {
+        throw new Error("No model loaded");
+      }
+
+      // Ensure visibility relationships are applied based on current mode
+      // This ensures meshes are correctly marked as visible/invisible
+      if (meshVisibilityManagerRef.current) {
+        meshVisibilityManagerRef.current.applyVisibilityRelationships();
+      }
+
+      // Get visible meshes based on current mode
+      const meshes = meshVisibilityManagerRef.current?.getMeshes() || [];
+      const visibleMeshNames = new Set();
+      
+      // Collect names of all visible meshes (including acrylic emissive base layers)
+      meshes.forEach((meshInfo) => {
+        if (meshInfo.visible && meshInfo.mesh) {
+          // Store the mesh name (include acrylic emissive base layers)
+          if (meshInfo.mesh.name) {
+            visibleMeshNames.add(meshInfo.mesh.name);
+          }
+          // Include children of visible meshes (including acrylic emissive base layers)
+          if (meshInfo.mesh.traverse) {
+            meshInfo.mesh.traverse((child) => {
+              if (child.isMesh && child.name) {
+                visibleMeshNames.add(child.name);
+              }
+            });
+          }
+        }
+      });
+
+      // Clone the model
+      let clonedModel;
+      try {
+        clonedModel = model.clone(true);
+      } catch (error) {
+        throw new Error(`Failed to clone model: ${error.message}`);
+      }
+
+      if (!clonedModel) {
+        throw new Error("Model clone failed - cloned model is undefined");
+      }
+
+      if (!clonedModel.traverse) {
+        throw new Error("Cloned model does not have traverse method");
+      }
+
+      // Remove invisible meshes from the cloned model
+      // We need to collect meshes to remove first, then remove them (can't modify during traversal)
+      const meshesToRemove = [];
+      clonedModel.traverse((obj) => {
+        if (obj.isMesh) {
+          // Check if this mesh should be visible by name
+          const shouldBeVisible = obj.name && visibleMeshNames.has(obj.name);
+          if (!shouldBeVisible) {
+            meshesToRemove.push(obj);
+          }
+        }
+      });
+
+      // Remove invisible meshes
+      meshesToRemove.forEach((mesh) => {
+        if (mesh.parent) {
+          mesh.parent.remove(mesh);
+        }
+      });
+
+      // Also remove empty groups/objects that have no visible children
+      const removeEmptyObjects = (object) => {
+        if (!object || !object.children) return;
+        
+        const childrenToRemove = [];
+        // Create a copy of children array since we'll be modifying it
+        const children = [...object.children];
+        children.forEach((child) => {
+          removeEmptyObjects(child);
+          // Remove if it's an empty group or object (no meshes or all meshes removed)
+          if (child.children && child.children.length === 0 && !child.isMesh) {
+            childrenToRemove.push(child);
+          }
+        });
+        childrenToRemove.forEach((child) => {
+          if (object.remove) {
+            object.remove(child);
+          }
+        });
+      };
+      
+      removeEmptyObjects(clonedModel);
+
+      return exportModelToGLB(clonedModel, filename, options);
+    },
+
+    // ============================================
+    // USDZ EXPORT (BLOB API)
+    // ============================================
+    exportUSDZBlob: async (options = {}) => {
+      const model = modelManagerRef.current?.getModel();
+      if (!model) {
+        throw new Error("No model loaded");
+      }
+
+      // Ensure visibility relationships are applied based on current mode
+      // This ensures meshes are correctly marked as visible/invisible
+      if (meshVisibilityManagerRef.current) {
+        meshVisibilityManagerRef.current.applyVisibilityRelationships();
+      }
+
+      // Get visible meshes based on current mode
+      const meshes = meshVisibilityManagerRef.current?.getMeshes() || [];
+      const visibleMeshNames = new Set();
+      
+      // Collect names of all visible meshes (including acrylic emissive base layers - they'll be converted to standard white materials)
+      meshes.forEach((meshInfo) => {
+        if (meshInfo.visible && meshInfo.mesh) {
+          // Store the mesh name (include acrylic emissive base layers - they'll be converted for USDZ)
+          if (meshInfo.mesh.name) {
+            visibleMeshNames.add(meshInfo.mesh.name);
+          }
+          // Include children of visible meshes (including acrylic emissive base layers)
+          if (meshInfo.mesh.traverse) {
+            meshInfo.mesh.traverse((child) => {
+              if (child.isMesh && child.name) {
+                visibleMeshNames.add(child.name);
+              }
+            });
+          }
+        }
+      });
+
+      // Clone the model
+      let clonedModel;
+      try {
+        clonedModel = model.clone(true);
+      } catch (error) {
+        throw new Error(`Failed to clone model: ${error.message}`);
+      }
+
+      if (!clonedModel) {
+        throw new Error("Model clone failed - cloned model is undefined");
+      }
+
+      if (!clonedModel.traverse) {
+        throw new Error("Cloned model does not have traverse method");
+      }
+
+      // Remove invisible meshes from the cloned model
+      // We need to collect meshes to remove first, then remove them (can't modify during traversal)
+      // Note: Acrylic emissive base layers are kept but will be converted to standard white materials in usdzUtils
+      const meshesToRemove = [];
+      clonedModel.traverse((obj) => {
+        if (obj.isMesh) {
+          // Check if this mesh should be visible by name
+          const shouldBeVisible = obj.name && visibleMeshNames.has(obj.name);
+          if (!shouldBeVisible) {
+            meshesToRemove.push(obj);
+          }
+        }
+      });
+
+      // Remove invisible meshes
+      meshesToRemove.forEach((mesh) => {
+        if (mesh.parent) {
+          mesh.parent.remove(mesh);
+        }
+      });
+
+      // Also remove empty groups/objects that have no visible children
+      const removeEmptyObjects = (object) => {
+        if (!object || !object.children) return;
+        
+        const childrenToRemove = [];
+        // Create a copy of children array since we'll be modifying it
+        const children = [...object.children];
+        children.forEach((child) => {
+          removeEmptyObjects(child);
+          // Remove if it's an empty group or object (no meshes or all meshes removed)
+          if (child.children && child.children.length === 0 && !child.isMesh) {
+            childrenToRemove.push(child);
+          }
+        });
+        childrenToRemove.forEach((child) => {
+          if (object.remove) {
+            object.remove(child);
+          }
+        });
+      };
+      
+      removeEmptyObjects(clonedModel);
+
+      return exportModelToUSDZBlob(clonedModel, options);
+    },
+
+    // ============================================
+    // GLB EXPORT (BLOB API)
+    // ============================================
+    exportGLBBlob: async (options = {}) => {
+      const model = modelManagerRef.current?.getModel();
+      if (!model) {
+        throw new Error("No model loaded");
+      }
+
+      // Ensure visibility relationships are applied based on current mode
+      // This ensures meshes are correctly marked as visible/invisible
+      if (meshVisibilityManagerRef.current) {
+        meshVisibilityManagerRef.current.applyVisibilityRelationships();
+      }
+
+      // Get visible meshes based on current mode
+      const meshes = meshVisibilityManagerRef.current?.getMeshes() || [];
+      const visibleMeshNames = new Set();
+      
+      // Collect names of all visible meshes (including acrylic emissive base layers)
+      meshes.forEach((meshInfo) => {
+        if (meshInfo.visible && meshInfo.mesh) {
+          // Store the mesh name (include acrylic emissive base layers)
+          if (meshInfo.mesh.name) {
+            visibleMeshNames.add(meshInfo.mesh.name);
+          }
+          // Include children of visible meshes (including acrylic emissive base layers)
+          if (meshInfo.mesh.traverse) {
+            meshInfo.mesh.traverse((child) => {
+              if (child.isMesh && child.name) {
+                visibleMeshNames.add(child.name);
+              }
+            });
+          }
+        }
+      });
+
+      // Clone the model
+      let clonedModel;
+      try {
+        clonedModel = model.clone(true);
+      } catch (error) {
+        throw new Error(`Failed to clone model: ${error.message}`);
+      }
+
+      if (!clonedModel) {
+        throw new Error("Model clone failed - cloned model is undefined");
+      }
+
+      if (!clonedModel.traverse) {
+        throw new Error("Cloned model does not have traverse method");
+      }
+
+      // Remove invisible meshes from the cloned model
+      // We need to collect meshes to remove first, then remove them (can't modify during traversal)
+      const meshesToRemove = [];
+      clonedModel.traverse((obj) => {
+        if (obj.isMesh) {
+          // Check if this mesh should be visible by name
+          const shouldBeVisible = obj.name && visibleMeshNames.has(obj.name);
+          if (!shouldBeVisible) {
+            meshesToRemove.push(obj);
+          }
+        }
+      });
+
+      // Remove invisible meshes
+      meshesToRemove.forEach((mesh) => {
+        if (mesh.parent) {
+          mesh.parent.remove(mesh);
+        }
+      });
+
+      // Also remove empty groups/objects that have no visible children
+      const removeEmptyObjects = (object) => {
+        if (!object || !object.children) return;
+        
+        const childrenToRemove = [];
+        // Create a copy of children array since we'll be modifying it
+        const children = [...object.children];
+        children.forEach((child) => {
+          removeEmptyObjects(child);
+          // Remove if it's an empty group or object (no meshes or all meshes removed)
+          if (child.children && child.children.length === 0 && !child.isMesh) {
+            childrenToRemove.push(child);
+          }
+        });
+        childrenToRemove.forEach((child) => {
+          if (object.remove) {
+            object.remove(child);
+          }
+        });
+      };
+      
+      removeEmptyObjects(clonedModel);
+
+      return exportModelToGLBBlob(clonedModel, options);
     },
 
     // ============================================
@@ -2762,13 +3167,19 @@ export function useArtworkViewer({
     // ============================================
     // MODEL OPERATIONS (Advanced)
     // ============================================
-    centerAndScaleModel: (scaleFactor = 2.5) => {
+    centerAndScaleModel: (scaleFactor = 2.5, sizeRatio = null) => {
       if (modelManagerRef.current) {
         const model = modelManagerRef.current.getModel();
         if (model) {
-          modelManagerRef.current.centerAndScaleModel(model, scaleFactor);
+          modelManagerRef.current.centerAndScaleModel(model, scaleFactor, sizeRatio);
           forceRender();
         }
+      }
+    },
+    rescaleModel: (sizeRatio) => {
+      if (modelManagerRef.current) {
+        modelManagerRef.current.rescaleModel(sizeRatio);
+        forceRender();
       }
     },
     updateCameraAndControls: (cameraPosition) => {
