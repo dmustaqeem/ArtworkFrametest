@@ -243,6 +243,17 @@ export class MaterialProcessor {
 
         // Replace material if upgraded
         if (updatedMat !== mat) {
+          // CRITICAL: Preserve userData (including __originalMetal snapshot) when material is replaced
+          if (mat.userData) {
+            updatedMat.userData = updatedMat.userData || {};
+            // Copy all userData properties, especially __originalMetal snapshot
+            Object.keys(mat.userData).forEach(key => {
+              if (!updatedMat.userData[key]) {
+                updatedMat.userData[key] = mat.userData[key];
+              }
+            });
+          }
+          
           if (Array.isArray(obj.material)) {
             obj.material[matIndex] = updatedMat;
           } else {
@@ -408,6 +419,17 @@ export class MaterialProcessor {
 
         // Replace material if upgraded
         if (updatedMat !== mat) {
+          // CRITICAL: Preserve userData (including __originalMetal snapshot) when material is replaced
+          if (mat.userData) {
+            updatedMat.userData = updatedMat.userData || {};
+            // Copy all userData properties, especially __originalMetal snapshot
+            Object.keys(mat.userData).forEach(key => {
+              if (!updatedMat.userData[key]) {
+                updatedMat.userData[key] = mat.userData[key];
+              }
+            });
+          }
+          
           if (Array.isArray(obj.material)) {
             obj.material[matIndex] = updatedMat;
           } else {

@@ -112,16 +112,30 @@ export function useTextureOperations({
         const meshCache = meshCacheRef?.current;
         const activeType = materialType.activeMaterialTypeRef.current;
         
-        // Detect metal type from cache or fallback to activeType
+        // Detect metal type from cache or fallback to metalColor from material type
         let detectedMetalType = null;
         if (meshCache && !meshCache.isEmpty()) {
           detectedMetalType = meshCache.detectMetalType();
         }
         
-        // Use detected type from cache if available, otherwise fall back to activeType
+        // CRITICAL: metalColor from model path takes precedence over mesh detection
+        // This ensures METAL_BOX_SILVER models always use silver, even if mesh names are ambiguous
         const meshNameLower = (layer.meshName || "").toLowerCase();
-        const isSilver = detectedMetalType === "silver" || (detectedMetalType === null && (activeType === "METAL" || meshNameLower.includes("silver")));
-        const isWhite = detectedMetalType === "white" || (detectedMetalType === null && (activeType === "METAL_BOX" || meshNameLower.includes("white")));
+        const currentMetalColor = materialType.metalColor;
+        
+        // Determine silver/white: prioritize metalColor (from model path) over mesh detection
+        // Only use mesh detection if metalColor is not explicitly set
+        const isSilver = currentMetalColor === "brushed_silver" ||
+                        detectedMetalType === "silver" || 
+                        (detectedMetalType === null && currentMetalColor !== "white" && (
+                          activeType === "METAL" || 
+                          meshNameLower.includes("silver")
+                        ));
+        const isWhite = currentMetalColor === "white" ||
+                       (detectedMetalType === "white" && currentMetalColor !== "brushed_silver") ||
+                       (detectedMetalType === null && currentMetalColor !== "brushed_silver" && (
+                         meshNameLower.includes("white")
+                       ));
         
         // Use cache for fast material lookups
         if (meshCache && !meshCache.isEmpty()) {

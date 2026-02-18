@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
 import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES } from './config/appConfig.jsx';
+import { TextureTransformModal } from './components/index.jsx';
 import './App.css';
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
   const [materialType, setMaterialType] = useState('ACRYLIC');
   const [reflectionIntensity, setReflectionIntensity] = useState(() => getDefaultReflectionIntensity('ACRYLIC'));
   const [glassVisible, setGlassVisible] = useState(true);
+  const [isTextureTransformModalOpen, setIsTextureTransformModalOpen] = useState(false);
   
   // File state - store File objects directly
   // Note: modelFile is no longer needed as models are loaded automatically based on material type
@@ -750,6 +752,22 @@ function App() {
           >
             Update Frame
           </button>
+          <button
+            onClick={() => setIsTextureTransformModalOpen(true)}
+            disabled={isLoading || !viewerRef.current}
+            style={{
+              width: '100%',
+              padding: '10px',
+              marginBottom: '5px',
+              backgroundColor: (!viewerRef.current) ? '#555' : '#FF9800',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (!viewerRef.current) ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Transform Texture
+          </button>
         </div>
 
         {/* Mode Switch */}
@@ -872,6 +890,19 @@ function App() {
           <strong>Note:</strong> Models are automatically loaded from assets based on selected material type
         </div>
       </div>
+
+      {/* Texture Transform Modal */}
+      {viewerRef.current && (
+        <TextureTransformModal
+          isOpen={isTextureTransformModalOpen}
+          onClose={() => setIsTextureTransformModalOpen(false)}
+          textureLayers={viewerRef.current.getTextureLayers?.() || []}
+          allTextureLayers={viewerRef.current.getTextureLayers?.() || []}
+          meshes={viewerRef.current.getMeshes?.() || []}
+          textureLoader={viewerRef.current.getTextureLoader?.() || null}
+          renderer={viewerRef.current.getRenderer?.() || null}
+        />
+      )}
     </div>
   );
 }

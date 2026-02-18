@@ -1510,6 +1510,22 @@ export function useArtworkViewer({
         const activeMaterialType = newMaterialType || materialType.activeMaterialType;
         materialType.activeMaterialTypeRef.current = activeMaterialType;
         materialType.setDetectedMaterialType(activeMaterialType);
+        
+        // CRITICAL: For METAL_BOX, determine metalColor from model path BEFORE model loads
+        // This ensures METAL_BOX_SILVER models use silver and METAL_BOX_WHITE models use white
+        // This must happen before mesh cache is built so detection uses correct color
+        if (activeMaterialType === "METAL_BOX") {
+          const modelPathLower = (finalModelPath || "").toLowerCase();
+          // Check model path first (most reliable)
+          if (modelPathLower.includes("silver") && materialType.metalColor !== "brushed_silver") {
+            materialType.setMetalColor("brushed_silver");
+          } else if (modelPathLower.includes("white") && materialType.metalColor !== "white") {
+            materialType.setMetalColor("white");
+          } else if (!materialType.metalColor || materialType.metalColor === MATERIAL_CONFIG.METAL_FINISH) {
+            // Default to silver if path doesn't indicate white
+            materialType.setMetalColor("brushed_silver");
+          }
+        }
 
         const materialModule = materialType.getActiveMaterialModule();
         if (!materialModule) {

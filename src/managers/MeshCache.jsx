@@ -63,8 +63,17 @@ export class MeshCache {
    * Index metal mesh by various patterns
    */
   _indexMetalMesh(mesh, material, meshNameLower) {
-    const isSilver = meshNameLower.includes("silver");
-    const isWhite = meshNameLower.includes("white") && meshNameLower.includes("metal");
+    // For metal box models, check for box-specific patterns
+    const isMetalBox = meshNameLower.includes("box");
+    
+    // Silver detection: check for "silver" OR metal box without "white"
+    const isSilver = meshNameLower.includes("silver") || 
+                     (isMetalBox && !meshNameLower.includes("white") && !meshNameLower.includes("whitemetal"));
+    
+    // White detection: check for "white" AND ("metal" OR "box")
+    const isWhite = (meshNameLower.includes("white") && (meshNameLower.includes("metal") || isMetalBox)) ||
+                    meshNameLower.includes("whitemetal");
+    
     const isFullBleed = meshNameLower.includes("fullbleed") || meshNameLower.includes("full_bleed");
     const isShrunk = meshNameLower.includes("shrunk") || meshNameLower.includes("shrink");
     const isArtwork = meshNameLower.includes("artwork");
@@ -80,6 +89,11 @@ export class MeshCache {
       if (isShrunk) {
         this._setIndex("silver_shrunk", mesh, material);
       }
+      // For metal box without fullbleed/shrunk, still index as silver if it's a metal box mesh
+      if (isMetalBox && !isFullBleed && !isShrunk) {
+        this._setIndex("silver_fullbleed", mesh, material);
+        this._setIndex("silver_fullbleed_color", mesh, material);
+      }
     }
 
     if (isWhite) {
@@ -89,6 +103,11 @@ export class MeshCache {
       }
       if (isShrunk) {
         this._setIndex("white_shrunk", mesh, material);
+      }
+      // For metal box without fullbleed/shrunk, still index as white if it's a white metal box mesh
+      if (isMetalBox && !isFullBleed && !isShrunk) {
+        this._setIndex("white_fullbleed", mesh, material);
+        this._setIndex("white_fullbleed_color", mesh, material);
       }
     }
   }
