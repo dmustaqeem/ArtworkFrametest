@@ -40,7 +40,11 @@ export function useMaterialType(initialType = MATERIAL_CONFIG.DEFAULT_TYPE) {
 
   // Get material module for active type
   const getActiveMaterialModule = () => {
-    const module = getMaterialModule(activeMaterialType);
+    // ✅ CRITICAL FIX: Use ref value if it exists and differs from computed value
+    // This handles React state timing issues where ref is updated before state
+    const typeToUse = activeMaterialTypeRef.current || activeMaterialType;
+    
+    const module = getMaterialModule(typeToUse);
     if (module) {
       materialModuleRef.current = module;
     }

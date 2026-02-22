@@ -123,10 +123,17 @@ export const MATERIAL_MODULES = {
  * @returns {Object} Material module configuration
  */
 export const getMaterialModule = (materialType) => {
-  if (!MATERIAL_MODULES[materialType]) {
-    return MATERIAL_MODULES.ACRYLIC;
+  if (!materialType) {
+    throw new Error("[getMaterialModule] materialType is null/undefined");
   }
-  return MATERIAL_MODULES[materialType];
+  
+  const module = MATERIAL_MODULES[materialType];
+  if (!module) {
+    const available = Object.keys(MATERIAL_MODULES).join(", ");
+    throw new Error(`[getMaterialModule] No material module registered for "${materialType}". Available: ${available}`);
+  }
+  
+  return module;
 };
 
 /**

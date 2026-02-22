@@ -514,6 +514,10 @@ export const applyMetalState = (model, renderer, state) => {
         if (isMetalMaterial) {
           metalLayerCount++;
           
+          // ✅ CRITICAL: Lock ALL metal controlled materials to prevent MaterialProcessor from overwriting
+          mat.userData = mat.userData || {};
+          mat.userData.__lockSystem = "METAL";
+          
           // ============================================
           // CRITICAL: Set render order - metal must render BEFORE artwork
           // ============================================
@@ -583,9 +587,14 @@ export const applyMetalState = (model, renderer, state) => {
           // Apply environment map intensity from preset (subtle reflections)
           // Keep envMap intact (uses scene.environment) - only set intensity
           mat.envMap = null; // Use scene.environment
+          
+          // ✅ Use base intensity from material.userData (survives material replacement)
+          // Fallback to preset value if not stored on material
+          const baseIntensity = mat.userData?.__baseEnvIntensity ?? (finishPreset.envMapIntensityMetal ?? 0.6);
+          
           if (wantsReflections) {
-            // Apply preset intensity scaled by reflectionIntensity
-            mat.envMapIntensity = (finishPreset.envMapIntensityMetal ?? 0.6) * reflectionIntensity;
+            // Apply base intensity scaled by reflectionIntensity
+            mat.envMapIntensity = baseIntensity * reflectionIntensity;
           } else {
             mat.envMapIntensity = 0.0;
           }
@@ -651,9 +660,8 @@ export const applyMetalState = (model, renderer, state) => {
           if (orig.roughnessMap) mat.roughnessMap = orig.roughnessMap;
           if (orig.metalnessMap) mat.metalnessMap = orig.metalnessMap;
           
-          // CRITICAL: Tag material as locked to metal system - prevents other systems from modifying it
-          if (!mat.userData) mat.userData = {};
-          mat.userData.__lockSystem = "METAL";
+          // ✅ Lock already set above at start of isMetalMaterial block
+          // No need to set again here
           
           mat.needsUpdate = true;
         }

@@ -114,6 +114,17 @@ export class MaterialProcessor {
       meshVisibilityManager, // Optional: for mesh type classification
     } = options;
 
+    // ✅ CRITICAL VALIDATION: Ensure module preset matches materialType
+    if (materialType === "WOOD") {
+      const presetKeys = this.materialModule?.preset ? Object.keys(this.materialModule.preset) : [];
+      const hasWood = presetKeys.includes("WOOD");
+      if (!hasWood) {
+        // Don't process - this will cause wrong stamping
+        // The caller should fix the module before calling
+        return { materialDetails: [], textureLayers: [] };
+      }
+    }
+
     const materialDetails = [];
     const textureLayers = [];
     let layerIdCounter = 0;
@@ -130,9 +141,10 @@ export class MaterialProcessor {
         : "other";
 
       mats.forEach((mat, matIndex) => {
-        // HARD STOP: never touch locked system materials (METAL or MIRROR)
+        // HARD STOP: never touch locked system materials (METAL, MIRROR, or WOOD)
         // Must check BEFORE any processing to prevent modifications
-        if (mat.userData?.__lockSystem === "METAL" || mat.userData?.__lockSystem === "MIRROR") {
+        const lock = mat.userData?.__lockSystem;
+        if (lock === "METAL" || lock === "MIRROR" || lock === "WOOD") {
           return; // NEVER touch locked systems
         }
         
@@ -243,15 +255,23 @@ export class MaterialProcessor {
 
         // Replace material if upgraded
         if (updatedMat !== mat) {
-          // CRITICAL: Preserve userData (including __originalMetal snapshot) when material is replaced
+          // CRITICAL: Preserve userData (including __originalMetal snapshot and base intensity) when material is replaced
+          updatedMat.userData = updatedMat.userData || {};
           if (mat.userData) {
-            updatedMat.userData = updatedMat.userData || {};
-            // Copy all userData properties, especially __originalMetal snapshot
-            Object.keys(mat.userData).forEach(key => {
-              if (!updatedMat.userData[key]) {
+            // Copy all userData properties, including falsy values (0, false, "", null)
+            for (const key of Object.keys(mat.userData)) {
+              // Copy even if value is 0/false/"" - only skip if key already exists
+              if (!(key in updatedMat.userData)) {
                 updatedMat.userData[key] = mat.userData[key];
               }
-            });
+            }
+          }
+          
+          // ✅ CRITICAL FIX: If base env intensity was set by applyPreset (e.g., applyWoodPreset),
+          // ensure it's preserved even if old mat had a different value
+          // This handles the case where applyWoodPreset sets __baseEnvIntensity, but we need to ensure it survives
+          if (updatedMat.userData.__baseEnvIntensity === undefined && preset.envBase !== undefined) {
+            updatedMat.userData.__baseEnvIntensity = preset.envBase;
           }
           
           if (Array.isArray(obj.material)) {
@@ -261,13 +281,20 @@ export class MaterialProcessor {
           }
         }
 
-        // Store base environment intensity
+        // ✅ Store base environment intensity on the material itself (survives replacements)
+        // CRITICAL: Always set this, even if applyWoodPreset already set it, to ensure consistency
         if (preset.envBase !== undefined) {
+          updatedMat.userData = updatedMat.userData || {};
+          // ✅ Always set from preset (don't skip if already exists) - ensures consistency after material replacement
+          updatedMat.userData.__baseEnvIntensity = preset.envBase;
+
+          // Keep Map only if you still want it for debugging
           this.baseEnvMapIntensities.set(updatedMat, preset.envBase);
-          // NEVER set envMapIntensity for locked systems - use lock-based detection (bulletproof)
-          const isLockedMetal = updatedMat.userData?.__lockSystem === "METAL";
-          const isLockedMirror = updatedMat.userData?.__lockSystem === "MIRROR";
-          if (!isLockedMetal && !isLockedMirror) {
+
+          // NEVER set envMapIntensity for locked systems
+          const lock = updatedMat.userData?.__lockSystem;
+          const isLocked = lock === "METAL" || lock === "MIRROR" || lock === "WOOD";
+          if (!isLocked) {
             updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
           }
           // For metals, envMapIntensity will be set by MetalMaterial.applyMetalState() only
@@ -419,15 +446,23 @@ export class MaterialProcessor {
 
         // Replace material if upgraded
         if (updatedMat !== mat) {
-          // CRITICAL: Preserve userData (including __originalMetal snapshot) when material is replaced
+          // CRITICAL: Preserve userData (including __originalMetal snapshot and base intensity) when material is replaced
+          updatedMat.userData = updatedMat.userData || {};
           if (mat.userData) {
-            updatedMat.userData = updatedMat.userData || {};
-            // Copy all userData properties, especially __originalMetal snapshot
-            Object.keys(mat.userData).forEach(key => {
-              if (!updatedMat.userData[key]) {
+            // Copy all userData properties, including falsy values (0, false, "", null)
+            for (const key of Object.keys(mat.userData)) {
+              // Copy even if value is 0/false/"" - only skip if key already exists
+              if (!(key in updatedMat.userData)) {
                 updatedMat.userData[key] = mat.userData[key];
               }
-            });
+            }
+          }
+          
+          // ✅ CRITICAL FIX: If base env intensity was set by applyPreset (e.g., applyWoodPreset),
+          // ensure it's preserved even if old mat had a different value
+          // This handles the case where applyWoodPreset sets __baseEnvIntensity, but we need to ensure it survives
+          if (updatedMat.userData.__baseEnvIntensity === undefined && preset.envBase !== undefined) {
+            updatedMat.userData.__baseEnvIntensity = preset.envBase;
           }
           
           if (Array.isArray(obj.material)) {
@@ -437,13 +472,20 @@ export class MaterialProcessor {
           }
         }
 
-        // Update environment intensity
+        // ✅ Store base environment intensity on the material itself (survives replacements)
+        // CRITICAL: Always set this, even if applyWoodPreset already set it, to ensure consistency
         if (preset.envBase !== undefined) {
+          updatedMat.userData = updatedMat.userData || {};
+          // ✅ Always set from preset (don't skip if already exists) - ensures consistency after material replacement
+          updatedMat.userData.__baseEnvIntensity = preset.envBase;
+
+          // Keep Map only if you still want it for debugging
           this.baseEnvMapIntensities.set(updatedMat, preset.envBase);
-          // NEVER set envMapIntensity for locked systems - use lock-based detection (bulletproof)
-          const isLockedMetal = updatedMat.userData?.__lockSystem === "METAL";
-          const isLockedMirror = updatedMat.userData?.__lockSystem === "MIRROR";
-          if (!isLockedMetal && !isLockedMirror) {
+
+          // NEVER set envMapIntensity for locked systems
+          const lock = updatedMat.userData?.__lockSystem;
+          const isLocked = lock === "METAL" || lock === "MIRROR" || lock === "WOOD";
+          if (!isLocked) {
             updatedMat.envMapIntensity = preset.envBase * reflectionIntensity;
           }
           // For metals, envMapIntensity will be set by MetalMaterial.applyMetalState() only
@@ -474,9 +516,9 @@ export class MaterialProcessor {
     // CRITICAL: For locked systems, DO NOT set envMapIntensity here - use lock-based detection (bulletproof)
     this.baseEnvMapIntensities.forEach((baseIntensity, mat) => {
       // Check lock system tag (bulletproof detection)
-      const isLockedMetal = mat.userData?.__lockSystem === "METAL";
-      const isLockedMirror = mat.userData?.__lockSystem === "MIRROR";
-      if (mat.envMapIntensity !== undefined && !isLockedMetal && !isLockedMirror) {
+      const lock = mat.userData?.__lockSystem;
+      const isLocked = lock === "METAL" || lock === "MIRROR" || lock === "WOOD";
+      if (mat.envMapIntensity !== undefined && !isLocked) {
         // Only update envMapIntensity for non-locked materials
         mat.envMapIntensity = baseIntensity * reflectionIntensity;
       }
@@ -490,6 +532,13 @@ export class MaterialProcessor {
    */
   getBaseEnvMapIntensities() {
     return this.baseEnvMapIntensities;
+  }
+
+  /**
+   * Get base environment intensity for a material (from userData, survives replacements)
+   */
+  getBaseEnvIntensity(mat, fallback = 1.0) {
+    return mat?.userData?.__baseEnvIntensity ?? fallback;
   }
 
   /**

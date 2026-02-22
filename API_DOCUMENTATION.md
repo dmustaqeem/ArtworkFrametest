@@ -132,6 +132,7 @@ your-project/
 
 ```jsx
 import { ArtworkViewer } from './viewer';  // or './src/viewer' depending on your structure
+import { ORIENTATION_TYPES, isOrientationAvailableForMaterial } from './config/appConfig';  // Optional: For orientation constants and helpers
 ```
 
 ## Quick Start
@@ -146,7 +147,7 @@ function MyApp() {
   const setupScene = async () => {
     await viewerRef.current?.setup({
       artworkTexture: '/path/to/artwork.jpg',
-      orientation: 'portrait',  // or 'landscape'
+      orientation: 'portrait',  // 'portrait', 'landscape', 'surfboard', or 'skateboard'
       materialType: 'ACRYLIC'
     });
   };
@@ -195,15 +196,20 @@ const viewerRef = useRef(null);
 ```jsx
 await viewerRef.current?.setup({
   artworkTexture: textureUrl,  // REQUIRED: Path or blob URL to artwork image
-  orientation: 'portrait',      // REQUIRED: 'portrait' or 'landscape'
+  orientation: 'portrait',      // REQUIRED: 'portrait', 'landscape', 'surfboard', or 'skateboard'
   materialType: 'METAL',        // REQUIRED: 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
   modelPath: modelFile,         // Optional: Custom model path (auto-selected if not provided)
   frameTexture: frameUrl,       // Optional: Path or blob URL to frame image
   mode: 'fullBleed',            // Optional: 'fullBleed' or 'shrunk' (default: 'fullBleed')
   hdriPath: customHdriPath,     // Optional: Custom HDRI path (auto-selected if not provided)
-  size: { width: 600, height: 900 }  // Optional: Custom size (defaults: Portrait 450x675, Landscape 675x450)
+  size: { width: 600, height: 900 }  // Optional: Custom size (defaults: Portrait 450x675, Landscape 675x450, Surfboard 300x1200, Skateboard 200x800)
 });
 ```
+
+**Important Notes:**
+- **Surfboard and Skateboard orientations are only available for ACRYLIC material type**
+- If you try to use `surfboard` or `skateboard` with a non-ACRYLIC material, an error will be thrown
+- These orientations use models from the root `/assets/models/` folder (not in Portrait/Landscape folders)
 
 **Simple Example (Recommended):**
 ```jsx
@@ -211,7 +217,7 @@ const handleSetup = async () => {
   // That's it! Model path and HDRI are auto-selected based on orientation and material type
   await viewerRef.current?.setup({
     artworkTexture: artworkUrl,
-    orientation: 'portrait',     // Select portrait or landscape
+    orientation: 'portrait',     // Select portrait, landscape, surfboard, or skateboard
     materialType: 'ACRYLIC'      // Model and HDRI automatically selected
   });
 };
@@ -224,6 +230,28 @@ const handleSetup = async () => {
     artworkTexture: artworkUrl,
     orientation: 'landscape',    // Use landscape models
     materialType: 'METAL'
+  });
+};
+```
+
+**Surfboard Example (ACRYLIC only):**
+```jsx
+const handleSetup = async () => {
+  await viewerRef.current?.setup({
+    artworkTexture: artworkUrl,
+    orientation: 'surfboard',     // Surfboard orientation (ACRYLIC only)
+    materialType: 'ACRYLIC'      // Required: Surfboard only works with ACRYLIC
+  });
+};
+```
+
+**Skateboard Example (ACRYLIC only):**
+```jsx
+const handleSetup = async () => {
+  await viewerRef.current?.setup({
+    artworkTexture: artworkUrl,
+    orientation: 'skateboard',    // Skateboard orientation (ACRYLIC only)
+    materialType: 'ACRYLIC'      // Required: Skateboard only works with ACRYLIC
   });
 };
 ```
@@ -530,6 +558,8 @@ await viewerRef.current?.setup({
   - Default sizes:
     - Portrait: `450x675`
     - Landscape: `675x450`
+    - Surfboard: `300x1200`
+    - Skateboard: `200x800`
 
 **Example:**
 ```jsx
@@ -547,6 +577,22 @@ await viewerRef.current?.setup({
   orientation: 'portrait',
   materialType: 'ACRYLIC'
   // Uses default: 450x675 for portrait
+});
+
+// Setup Surfboard with default size
+await viewerRef.current?.setup({
+  artworkTexture: '/artwork.jpg',
+  orientation: 'surfboard',
+  materialType: 'ACRYLIC'  // Required: Surfboard only works with ACRYLIC
+  // Uses default: 300x1200 for surfboard
+});
+
+// Setup Skateboard with custom size
+await viewerRef.current?.setup({
+  artworkTexture: '/artwork.jpg',
+  orientation: 'skateboard',
+  materialType: 'ACRYLIC',  // Required: Skateboard only works with ACRYLIC
+  size: { width: 250, height: 1000 }  // Custom size (default: 200x800)
 });
 ```
 
@@ -567,11 +613,11 @@ viewerRef.current?.rescaleModel(sizeRatio);
 
 **Example:**
 ```jsx
+import { ORIENTATION_TYPES, DEFAULT_SIZES } from './config/appConfig';
+
 // Calculate size ratio
-const orientation = 'portrait'; // or 'landscape'
-const defaultSize = orientation === 'portrait' 
-  ? { width: 450, height: 675 } 
-  : { width: 675, height: 450 };
+const orientation = ORIENTATION_TYPES.PORTRAIT; // or LANDSCAPE, SURFBOARD, SKATEBOARD
+const defaultSize = DEFAULT_SIZES[orientation] || DEFAULT_SIZES.PORTRAIT;
 
 const newSize = { width: 600, height: 900 };
 const sizeRatio = {
@@ -594,7 +640,7 @@ import { useRef, useState } from 'react';
 function MyApp() {
   const viewerRef = useRef(null);
   const [artworkUrl, setArtworkUrl] = useState(null);
-  const [orientation, setOrientation] = useState('portrait'); // 'portrait' or 'landscape'
+  const [orientation, setOrientation] = useState('portrait'); // 'portrait', 'landscape', 'surfboard', or 'skateboard'
   const [materialType, setMaterialType] = useState('ACRYLIC');
 
   const handleSetup = async () => {
@@ -602,8 +648,9 @@ function MyApp() {
       // Simple setup - model path and HDRI are auto-selected!
       await viewerRef.current?.setup({
         artworkTexture: artworkUrl,
-        orientation: orientation,  // 'portrait' or 'landscape'
+        orientation: orientation,  // 'portrait', 'landscape', 'surfboard', or 'skateboard'
         materialType: materialType // Model and HDRI automatically selected
+        // Note: 'surfboard' and 'skateboard' only work with 'ACRYLIC' material type
       });
       console.log('Scene ready!');
     } catch (error) {
@@ -640,9 +687,29 @@ function MyApp() {
 
 ## Notes
 
-- **Orientation**: Must be specified as 'portrait' or 'landscape'. Models are organized in separate folders:
+- **Orientation**: Must be specified as one of:
+  - `'portrait'` - Standard portrait orientation
+  - `'landscape'` - Standard landscape orientation
+  - `'surfboard'` - Surfboard orientation (ACRYLIC only)
+  - `'skateboard'` - Skateboard orientation (ACRYLIC only)
+  
+- **Model Organization**:
   - Portrait models: `/assets/models/Potraits/{MaterialType}/`
   - Landscape models: `/assets/models/Landscape/{MaterialType}/`
+  - Surfboard models: `/assets/models/Surfboard_{size}.glb` (root folder, ACRYLIC only)
+  - Skateboard models: `/assets/models/Skateboard_{size}.glb` (root folder, ACRYLIC only)
+
+- **Orientation Restrictions**:
+  - `'surfboard'` and `'skateboard'` orientations are **only available for ACRYLIC material type**
+  - Attempting to use these orientations with other materials will throw an error
+  - Use `isOrientationAvailableForMaterial(orientation, materialType)` helper to check availability
+
+- **Default Sizes**:
+  - Portrait: `450x675`
+  - Landscape: `675x450`
+  - Surfboard: `300x1200`
+  - Skateboard: `200x800`
+
 - **Model Path**: Auto-selected based on orientation and material type. Can be overridden with custom File object or string path
 - **HDRI**: Automatically selected based on material type:
   - `MIRROR` → Uses `studio2.hdr`
@@ -687,14 +754,17 @@ If HDRI doesn't load:
 
 If models don't load:
 1. **Model path is auto-selected** - Based on orientation and material type, so no need to specify unless using custom model
-2. **Verify orientation** - Must be 'portrait' or 'landscape' (case-sensitive)
+2. **Verify orientation** - Must be 'portrait', 'landscape', 'surfboard', or 'skateboard' (case-sensitive)
 3. **Check folder structure** - Ensure models exist in:
    - Portrait: `/public/assets/models/Potraits/{MaterialType}/`
    - Landscape: `/public/assets/models/Landscape/{MaterialType}/`
-4. **Check browser console** - Look for error messages
-5. **Validate GLB file** - Ensure model file is a valid GLB format
-6. **Verify material type** - Ensure material type is one of: 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
-7. **Check model paths in config** - Verify `getModelPath()` in `config/appConfig.jsx` returns valid paths for your orientation and material types
+   - Surfboard: `/public/assets/models/Surfboard_{size}.glb` (root folder)
+   - Skateboard: `/public/assets/models/Skateboard_{size}.glb` (root folder)
+4. **Check orientation restrictions** - Surfboard and Skateboard only work with ACRYLIC material type
+5. **Check browser console** - Look for error messages
+6. **Validate GLB file** - Ensure model file is a valid GLB format
+7. **Verify material type** - Ensure material type is one of: 'ACRYLIC', 'METAL', 'METAL_BOX', 'WOOD', 'MIRROR'
+8. **Check model paths in config** - Verify `getModelPath()` in `config/appConfig.jsx` returns valid paths for your orientation and material types
 
 ### Path Issues
 
@@ -733,6 +803,91 @@ import { createSceneManager } from "./managers/index.jsx";
 1. **"Cannot find module" errors** → Check folder structure and import paths
 2. **HDRI not found** → Add HDRI file to `public/assets/hdr/` or update path in config
 3. **Component not rendering** → Ensure container has width/height (e.g., `width: '100vw', height: '100vh'`)
+
+---
+
+## Exported Constants and Helpers
+
+The `config/appConfig.jsx` file exports several useful constants and helper functions:
+
+### Orientation Constants
+
+```jsx
+import { ORIENTATION_TYPES } from './config/appConfig';
+
+// Available values:
+ORIENTATION_TYPES.PORTRAIT    // 'portrait'
+ORIENTATION_TYPES.LANDSCAPE   // 'landscape'
+ORIENTATION_TYPES.SURFBOARD   // 'surfboard' (ACRYLIC only)
+ORIENTATION_TYPES.SKATEBOARD  // 'skateboard' (ACRYLIC only)
+```
+
+### Default Sizes
+
+```jsx
+import { DEFAULT_SIZES } from './config/appConfig';
+
+// Available default sizes:
+DEFAULT_SIZES.PORTRAIT    // { width: 450, height: 675 }
+DEFAULT_SIZES.LANDSCAPE   // { width: 675, height: 450 }
+DEFAULT_SIZES.SURFBOARD   // { width: 300, height: 1200 }
+DEFAULT_SIZES.SKATEBOARD  // { width: 200, height: 800 }
+```
+
+### Helper Functions
+
+**`isOrientationAvailableForMaterial(orientation, materialType)`** - Check if an orientation is available for a given material type.
+
+```jsx
+import { isOrientationAvailableForMaterial, ORIENTATION_TYPES } from './config/appConfig';
+
+// Check if surfboard is available for ACRYLIC
+const isAvailable = isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, 'ACRYLIC');
+// Returns: true
+
+// Check if surfboard is available for METAL
+const isAvailable = isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, 'METAL');
+// Returns: false (surfboard only works with ACRYLIC)
+```
+
+**Available Orientations:**
+- `ORIENTATION_TYPES.PORTRAIT` - 'portrait'
+- `ORIENTATION_TYPES.LANDSCAPE` - 'landscape'
+- `ORIENTATION_TYPES.SURFBOARD` - 'surfboard' (ACRYLIC only)
+- `ORIENTATION_TYPES.SKATEBOARD` - 'skateboard' (ACRYLIC only)
+
+**Example Usage:**
+```jsx
+import { isOrientationAvailableForMaterial, ORIENTATION_TYPES } from './config/appConfig';
+
+function MyComponent() {
+  const [orientation, setOrientation] = useState(ORIENTATION_TYPES.PORTRAIT);
+  const [materialType, setMaterialType] = useState('ACRYLIC');
+  
+  const handleOrientationChange = (newOrientation) => {
+    if (isOrientationAvailableForMaterial(newOrientation, materialType)) {
+      setOrientation(newOrientation);
+    } else {
+      console.warn(`${newOrientation} is not available for ${materialType}`);
+    }
+  };
+  
+  // Enable/disable orientation buttons based on material
+  const canUseSurfboard = isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType);
+  const canUseSkateboard = isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType);
+  
+  return (
+    <div>
+      <button 
+        onClick={() => handleOrientationChange(ORIENTATION_TYPES.SURFBOARD)}
+        disabled={!canUseSurfboard}
+      >
+        Surfboard {!canUseSurfboard && '(ACRYLIC only)'}
+      </button>
+    </div>
+  );
+}
+```
 
 ---
 

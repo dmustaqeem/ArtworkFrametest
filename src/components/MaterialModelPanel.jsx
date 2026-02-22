@@ -154,22 +154,12 @@ export default function MaterialModelPanel({
     // Map to internal material type
     const internalType = MATERIAL_TYPE_MAP[materialType];
     
-    // Get the first available model for this material type
-    const models = MATERIAL_MODEL_MAP[materialType]?.models || [];
-    const firstModel = models[0];
+    // ✅ Don't auto-select model or trigger setup - just change the tab
+    // User must manually select a model and click "Setup Scene" button
+    // This prevents automatic scene reconfiguration when just browsing material types
     
-    // If there's a first model, automatically select it
-    // This will trigger model reload which handles material type change
-    if (firstModel && onModelSelect) {
-      // Use setTimeout to debounce and prevent rapid clicks
-      setTimeout(() => {
-        onModelSelect(firstModel.path, internalType, materialType);
-      }, 0);
-      // Don't call onMaterialTypeChange here - the model reload will handle it
-      // This prevents race conditions and duplicate material updates
-    } else if (onMaterialTypeChange && internalType) {
-      // Only call onMaterialTypeChange if no model is being loaded
-      // (for cases where we're just switching material type on existing model)
+    // Only notify parent of material type change (without triggering setup)
+    if (onMaterialTypeChange && internalType) {
       setTimeout(() => {
         onMaterialTypeChange(internalType, materialType);
       }, 0);

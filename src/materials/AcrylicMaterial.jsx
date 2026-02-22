@@ -82,7 +82,10 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
 
   // ✅ ADD THIS HERE (before GLASS detection)
   // Acrylic back should be classified as BACK role (not DEFAULT or GLASS)
-  if (meshNameLower.includes("acrylic") && meshNameLower.includes("back")) {
+  // Also check for Surfboard/Skateboard back meshes (these models are only used with Acrylic)
+  if ((meshNameLower.includes("acrylic") && meshNameLower.includes("back")) ||
+      ((meshNameLower.includes("surfboard") || meshNameLower.includes("skateboard")) && 
+       (meshNameLower.includes("back") || meshNameLower.includes("rear")))) {
     return "BACK"; // Classify as BACK role for proper matte/bright settings
   }
 
@@ -258,6 +261,15 @@ export const applyAcrylicPreset = (material, preset, renderer, role, options = {
     }
   }
 
+  // ✅ CRITICAL FIX: Store base env intensity on the material itself (survives material replacement)
+  // This ensures reflection intensity updates work correctly even after material replacement
+  updatedMat.userData = updatedMat.userData || {};
+  const baseFromPreset = typeof preset.envBase === "number" ? preset.envBase : 
+                         (preset.envBase === undefined ? undefined : 1.0);
+  if (baseFromPreset !== undefined) {
+    updatedMat.userData.__baseEnvIntensity = baseFromPreset;
+  }
+
   return updatedMat;
 };
 
@@ -290,7 +302,10 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
     const isArtwork = isArtworkFull || isArtworkShrunk;
     const isAcrylicBack =
       objName === "Acrylic_Back" ||
-      (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+      (objNameLower.includes("acrylic") && objNameLower.includes("back")) ||
+      // Surfboard and Skateboard models are only used with Acrylic, so their back meshes should be treated as acrylicBack
+      ((objNameLower.includes("surfboard") || objNameLower.includes("skateboard")) && 
+       (objNameLower.includes("back") || objNameLower.includes("rear")));
 
     // ARTWORK: matte + no reflections (no emissive brightness)
     if (isArtwork) {
@@ -337,7 +352,13 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
 
         // reflections
         if (envMap) pm.envMap = envMap;
-        pm.envMapIntensity = reflectionIntensity;
+        // ✅ CRITICAL FIX: Use base intensity * reflectionIntensity, not just reflectionIntensity
+        // Glass preset has envBase: 1.6, so use that as base
+        const glassBase = pm.userData?.__baseEnvIntensity ?? 1.6;
+        pm.envMapIntensity = glassBase * reflectionIntensity;
+        // Ensure base is stored for future updates
+        pm.userData = pm.userData || {};
+        pm.userData.__baseEnvIntensity = glassBase;
 
         // CRITICAL: Zero roughness for optical clarity (no transmission blur)
         pm.roughness = 0.0;
@@ -434,7 +455,10 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
     const isArtwork = isArtworkFull || isArtworkShrunk;
     const isAcrylicBack =
       objName === "Acrylic_Back" ||
-      (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+      (objNameLower.includes("acrylic") && objNameLower.includes("back")) ||
+      // Surfboard and Skateboard models are only used with Acrylic, so their back meshes should be treated as acrylicBack
+      ((objNameLower.includes("surfboard") || objNameLower.includes("skateboard")) && 
+       (objNameLower.includes("back") || objNameLower.includes("rear")));
 
     // Skip ONLY artwork (keep matte/no reflections set elsewhere)
     if (isArtwork) return;
@@ -456,15 +480,17 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
         // Use scene.environment (set by main component)
         mat.envMap = null;
 
-        // Get base intensity from the map (stored during initial load)
-        const baseIntensity = baseEnvMapIntensities.get(mat);
+        // ✅ CRITICAL FIX: Use userData first (survives material replacement), then fall back to Map
+        const baseFromUserData = mat?.userData?.__baseEnvIntensity;
+        const baseFromMap = baseEnvMapIntensities?.get ? baseEnvMapIntensities.get(mat) : undefined;
+        const baseIntensity = typeof baseFromUserData === "number" ? baseFromUserData : baseFromMap;
+
+        // For glass/acrylic materials, use higher intensity for glossy reflections
+        // For print materials, use lower intensity to prevent color spillage
+        const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
+          (mat.transmission !== undefined && mat.transmission > 0.5);
 
         if (baseIntensity !== undefined) {
-          // For glass/acrylic materials, use higher intensity for glossy reflections
-          // For print materials, use lower intensity to prevent color spillage
-          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
-            (mat.transmission !== undefined && mat.transmission > 0.5);
-
           if (isGlassOrAcrylic) {
             // Glass/acrylic: keep strong reflections but slightly reduce intensity
             // to avoid washing out whites behind the acrylic
@@ -473,15 +499,14 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
             // Print/artwork: give a bit more environment lift so whites stay punchy
             mat.envMapIntensity = baseIntensity * 0.6 * reflectionIntensity;
           }
-        } else if (mat.envMapIntensity !== undefined) {
-          // Fallback: determine based on material properties
-          const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
-            (mat.transmission !== undefined && mat.transmission > 0.5);
-
+        } else {
+          // ✅ Fallback: use preset defaults if base is missing
+          // Glass/acrylic typically has envBase ~1.6, print ~undefined (preserve original)
+          const fallbackBase = isGlassOrAcrylic ? 1.6 : (mat.envMapIntensity || 1.0);
           if (isGlassOrAcrylic) {
-            mat.envMapIntensity = mat.envMapIntensity * 0.8 * reflectionIntensity;
+            mat.envMapIntensity = fallbackBase * 0.8 * reflectionIntensity;
           } else {
-            mat.envMapIntensity = mat.envMapIntensity * 0.6 * reflectionIntensity;
+            mat.envMapIntensity = fallbackBase * 0.6 * reflectionIntensity;
           }
         }
 
@@ -520,7 +545,11 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
     const objName = obj.name || "";
     const objNameLower = objName.toLowerCase();
     const isArtwork = objName === "Artwork_FullBleed" || objName === "Artwork_Shrunk";
-    const isAcrylicBack = objName === "Acrylic_Back" || (objNameLower.includes("acrylic") && objNameLower.includes("back"));
+    const isAcrylicBack = objName === "Acrylic_Back" || 
+      (objNameLower.includes("acrylic") && objNameLower.includes("back")) ||
+      // Surfboard and Skateboard models are only used with Acrylic, so their back meshes should be treated as acrylicBack
+      ((objNameLower.includes("surfboard") || objNameLower.includes("skateboard")) && 
+       (objNameLower.includes("back") || objNameLower.includes("rear")));
 
     if (isArtwork) return;
 
@@ -537,8 +566,10 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
       if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
-        // Get base intensity from the map (stored during initial load)
-        const baseIntensity = baseEnvMapIntensities.get(mat);
+        // ✅ CRITICAL FIX: Use userData first (survives material replacement), then fall back to Map
+        const baseFromUserData = mat?.userData?.__baseEnvIntensity;
+        const baseFromMap = baseEnvMapIntensities?.get ? baseEnvMapIntensities.get(mat) : undefined;
+        const baseIntensity = typeof baseFromUserData === "number" ? baseFromUserData : baseFromMap;
 
         // Determine if this is a glass/acrylic material or print material
         const isGlassOrAcrylic = mat.isMeshPhysicalMaterial &&
@@ -553,16 +584,14 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
             // Print/artwork: give a bit more environment lift so whites stay punchy
             mat.envMapIntensity = baseIntensity * 0.6 * reflectionIntensity;
           }
-        } else if (mat.envMapIntensity !== undefined) {
-          // Fallback: use current intensity
-          const currentBase = isGlassOrAcrylic
-            ? mat.envMapIntensity / (1.0 * Math.max(reflectionIntensity, 0.1))
-            : mat.envMapIntensity / (0.4 * Math.max(reflectionIntensity, 0.1));
-
+        } else {
+          // ✅ Fallback: use preset defaults if base is missing
+          // Glass/acrylic typically has envBase ~1.6, print ~undefined (preserve original)
+          const fallbackBase = isGlassOrAcrylic ? 1.6 : (mat.envMapIntensity || 1.0);
           if (isGlassOrAcrylic) {
-            mat.envMapIntensity = currentBase * 0.8 * reflectionIntensity;
+            mat.envMapIntensity = fallbackBase * 0.8 * reflectionIntensity;
           } else {
-            mat.envMapIntensity = currentBase * 0.6 * reflectionIntensity;
+            mat.envMapIntensity = fallbackBase * 0.6 * reflectionIntensity;
           }
         }
 

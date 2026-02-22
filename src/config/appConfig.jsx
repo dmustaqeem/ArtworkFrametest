@@ -68,6 +68,8 @@ export const MATERIAL_TYPE_MAP = {
 export const ORIENTATION_TYPES = {
   PORTRAIT: "portrait",
   LANDSCAPE: "landscape",
+  SURFBOARD: "surfboard",
+  SKATEBOARD: "skateboard",
 };
 
 /**
@@ -76,6 +78,8 @@ export const ORIENTATION_TYPES = {
 export const DEFAULT_SIZES = {
   PORTRAIT: { width: 450, height: 675 },
   LANDSCAPE: { width: 675, height: 450 },
+  SURFBOARD: { width: 300, height: 1200 },
+  SKATEBOARD: { width: 200, height: 800 },
 };
 
 /**
@@ -116,8 +120,25 @@ export const parseSize = (sizeString) => {
 };
 
 /**
+ * Check if an orientation is available for a given material type
+ * @param {string} orientation - Orientation type
+ * @param {string} materialType - Material type (display or internal)
+ * @returns {boolean} True if orientation is available for the material
+ */
+export const isOrientationAvailableForMaterial = (orientation, materialType) => {
+  // Surfboard and Skateboard are only available for ACRYLIC
+  if (orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) {
+    const materialMapping = MATERIAL_TYPE_MAP[materialType];
+    const internalType = materialMapping ? materialMapping.internalType : materialType;
+    return internalType === "ACRYLIC";
+  }
+  // All other orientations are available for all materials
+  return true;
+};
+
+/**
  * Get model path based on orientation, material type, and size
- * @param {string} orientation - Orientation type ('portrait' or 'landscape')
+ * @param {string} orientation - Orientation type ('portrait', 'landscape', 'surfboard', or 'skateboard')
  * @param {string} materialType - Material type (can be display type like METAL_SILVER or internal type like METAL)
  * @param {string} metalFinish - Optional metal finish (brushed_silver or white) - defaults to brushed_silver
  * @param {Object} size - Optional size object with {width, height} - defaults to default size for orientation
@@ -125,13 +146,16 @@ export const parseSize = (sizeString) => {
  */
 export const getModelPath = (orientation, materialType, metalFinish = "brushed_silver", size = null) => {
   // Validate orientation
-  if (!orientation || (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE)) {
-    throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
+  const validOrientations = [
+    ORIENTATION_TYPES.PORTRAIT,
+    ORIENTATION_TYPES.LANDSCAPE,
+    ORIENTATION_TYPES.SURFBOARD,
+    ORIENTATION_TYPES.SKATEBOARD,
+  ];
+  if (!orientation || !validOrientations.includes(orientation)) {
+    throw new Error(`Invalid orientation: ${orientation}. Must be one of: ${validOrientations.join(', ')}`);
   }
 
-  // Normalize orientation to match folder name (Potraits has typo in folder name)
-  const orientationFolder = orientation === ORIENTATION_TYPES.PORTRAIT ? "Potraits" : "Landscape";
-  
   // Check if it's a display type (has mapping)
   const materialMapping = MATERIAL_TYPE_MAP[materialType];
   
@@ -142,6 +166,29 @@ export const getModelPath = (orientation, materialType, metalFinish = "brushed_s
     internalType = materialMapping.internalType;
     finish = materialMapping.metalFinish || metalFinish;
   }
+
+  // Special handling for Surfboard and Skateboard - they're in root folder and only work with ACRYLIC
+  if (orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) {
+    if (internalType !== "ACRYLIC") {
+      throw new Error(`${orientation} orientation is only available for ACRYLIC material type`);
+    }
+    
+    const defaultSize = orientation === ORIENTATION_TYPES.SURFBOARD 
+      ? DEFAULT_SIZES.SURFBOARD 
+      : DEFAULT_SIZES.SKATEBOARD;
+    const sizeString = formatSize(defaultSize);
+    
+    const modelFile = orientation === ORIENTATION_TYPES.SURFBOARD 
+      ? `Surfboard_${sizeString}.glb`
+      : `Skateboard_${sizeString}.glb`;
+    
+    // These models are in the root of the models folder
+    const basePath = `/assets/models/${modelFile}`;
+    return addCacheBuster(basePath);
+  }
+
+  // Normalize orientation to match folder name (Potraits has typo in folder name)
+  const orientationFolder = orientation === ORIENTATION_TYPES.PORTRAIT ? "Potraits" : "Landscape";
   
   // Map internal types to folder names
   const materialFolderMap = {
@@ -163,14 +210,11 @@ export const getModelPath = (orientation, materialType, metalFinish = "brushed_s
   const sizeString = formatSize(defaultSize);
   
   // Map internal types to model file names
-  // NOTE: Landscape/Wood uses "Wood_Print.glb" instead of "Wood_675x450.glb"
   const modelFileMap = {
     ACRYLIC: `Acrylic_${sizeString}.glb`,
     METAL: finish === "white" ? `Metal_White_${sizeString}.glb` : `Metal_Silver_${sizeString}.glb`,
     METAL_BOX: finish === "white" ? `Metal_Box_White_${sizeString}.glb` : `Metal_Box_Silver_${sizeString}.glb`,
-    WOOD: orientationFolder === "Landscape" 
-      ? "Wood_Print.glb" // Special case for landscape wood
-      : `Wood_${sizeString}.glb`,
+    WOOD: `Wood_${sizeString}.glb`,
     MIRROR: `Mirror_${sizeString}.glb`,
   };
   

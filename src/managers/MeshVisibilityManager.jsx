@@ -58,7 +58,13 @@ export class MeshVisibilityManager {
         nameLower.includes('acrylic_cover') || (nameLower.includes('acrylic') && nameLower.includes('cover'))) {
       result = "glass";
     }
-    // Check for acrylic back (most specific - must be checked before generic back)
+    // Check for acrylic back (most specific - check for Surfboard/Skateboard back meshes first, then generic acrylic back)
+    // Surfboard and Skateboard models are only used with Acrylic, so their back meshes should be treated as acrylicBack
+    else if ((nameLower.includes('surfboard') || nameLower.includes('skateboard')) && 
+             (nameLower.includes('back') || nameLower.includes('rear'))) {
+      result = "acrylicBack";
+    }
+    // Check for acrylic back (generic pattern)
     else if (nameLower.includes('acrylic') && (nameLower.includes('back') || nameLower.includes('rear'))) {
       result = "acrylicBack";
     }

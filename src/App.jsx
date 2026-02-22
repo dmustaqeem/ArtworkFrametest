@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { ArtworkViewer } from './viewer/index.jsx';
-import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES, DEFAULT_SIZES, EXAMPLE_SIZES, formatSize } from './config/appConfig.jsx';
+import { UI_CONFIG, getModelPath, getMaterialTypeInfo, getMaterialTypeDisplayName, MATERIAL_TYPE_MAP, getDefaultReflectionIntensity, ORIENTATION_TYPES, DEFAULT_SIZES, EXAMPLE_SIZES, formatSize, isOrientationAvailableForMaterial } from './config/appConfig.jsx';
 import { TextureTransformModal } from './components/index.jsx';
 import './App.css';
 
@@ -28,13 +28,28 @@ function App() {
   // Store blob URLs for texture loading (textures can use blob URLs)
   const [artworkUrl, setArtworkUrl] = useState(null);
   const [frameUrl, setFrameUrl] = useState(null);
-  const [hdrUrl, setHdrUrl] = useState(null); // HDR URL for non-mirror materials
-  const [hdrMirrorUrl, setHdrMirrorUrl] = useState(null); // HDR URL for mirror material
   const [backgroundUrl, setBackgroundUrl] = useState(null); // Background image URL
 
   // Track if model is loaded to enable real-time size updates
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const previousSizeRef = useRef(size);
+  
+  // Request ID guard to prevent race conditions
+  const setupRequestIdRef = useRef(0);
+  
+  // Helper to wait for viewer to be ready
+  const waitForViewerReady = (timeoutMs = 4000) =>
+    new Promise((resolve, reject) => {
+      const start = Date.now();
+
+      const tick = () => {
+        if (viewerRef.current) return resolve(viewerRef.current);
+        if (Date.now() - start > timeoutMs) return reject(new Error("Viewer not ready"));
+        requestAnimationFrame(tick);
+      };
+
+      tick();
+    });
 
   // Real-time size update effect - rescale model when size changes (without reloading)
   useEffect(() => {
@@ -50,9 +65,18 @@ function App() {
     }
     
     // Calculate size ratio
-    const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
-      ? DEFAULT_SIZES.PORTRAIT 
-      : DEFAULT_SIZES.LANDSCAPE;
+    let defaultSize;
+    if (orientation === ORIENTATION_TYPES.PORTRAIT) {
+      defaultSize = DEFAULT_SIZES.PORTRAIT;
+    } else if (orientation === ORIENTATION_TYPES.LANDSCAPE) {
+      defaultSize = DEFAULT_SIZES.LANDSCAPE;
+    } else if (orientation === ORIENTATION_TYPES.SURFBOARD) {
+      defaultSize = DEFAULT_SIZES.SURFBOARD;
+    } else if (orientation === ORIENTATION_TYPES.SKATEBOARD) {
+      defaultSize = DEFAULT_SIZES.SKATEBOARD;
+    } else {
+      defaultSize = DEFAULT_SIZES.PORTRAIT; // fallback
+    }
     
     if (size.width && size.height) {
       const sizeRatio = {
@@ -106,31 +130,109 @@ function App() {
     }
   };
 
-  const handleHdrUpload = (e) => {
+  const handleHdrUpload = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Clean up old URL
-      if (hdrUrl) {
-        URL.revokeObjectURL(hdrUrl);
-      }
       // Store File object directly - EnvironmentManager will handle it
       setHdrFile(file);
-      setHdrUrl(null); // Don't create blob URL, pass File directly
       setStatus(`HDR environment uploaded: ${file.name}`);
+      
+      // If artwork is already loaded, reconfigure scene to apply new HDR
+      if (artworkUrl) {
+        await reconfigureScene();
+      }
     }
   };
 
-  const handleHdrMirrorUpload = (e) => {
+  const handleHdrMirrorUpload = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Clean up old URL
-      if (hdrMirrorUrl) {
-        URL.revokeObjectURL(hdrMirrorUrl);
-      }
       // Store File object directly - EnvironmentManager will handle it
       setHdrMirrorFile(file);
-      setHdrMirrorUrl(null); // Don't create blob URL, pass File directly
       setStatus(`Mirror HDR environment uploaded: ${file.name}`);
+      
+      // If artwork is already loaded, reconfigure scene to apply new HDR
+      if (artworkUrl) {
+        await reconfigureScene();
+      }
+    }
+  };
+
+  // Unified scene reconfiguration function with race condition protection
+  const reconfigureScene = async ({
+    displayType,
+    newOrientation,
+    newSize,
+    modeOverride,
+  } = {}) => {
+    if (!artworkUrl) return;
+
+    const requestId = ++setupRequestIdRef.current;
+
+    setIsLoading(true);
+    setIsModelLoaded(false); // Disable rescale during setup
+    setStatus("Reconfiguring scene...");
+
+    try {
+      let viewer;
+      try {
+        viewer = viewerRef.current || (await waitForViewerReady());
+      } catch (e) {
+        setStatus(`Viewer not ready: ${e.message}`);
+        return;
+      }
+
+      const effectiveDisplayType = displayType || materialType;
+      const effectiveOrientation = newOrientation || orientation;
+      const effectiveSize = newSize || size;
+      const effectiveMode = modeOverride || currentMode;
+
+      const { internalType } = getMaterialTypeInfo(effectiveDisplayType);
+
+      const modelPath = getModelPath(effectiveOrientation, effectiveDisplayType, undefined, effectiveSize);
+
+      const customHdrPath =
+        internalType === "MIRROR" ? (hdrMirrorFile || undefined) : (hdrFile || undefined);
+
+      await viewer.setup({
+        modelPath,
+        artworkTexture: artworkUrl,
+        orientation: effectiveOrientation,
+        materialType: internalType,
+        frameTexture: frameUrl || undefined,
+        hdriPath: customHdrPath,
+        mode: effectiveMode,
+        size: effectiveSize,
+      });
+
+      // Ignore stale completions
+      if (requestId !== setupRequestIdRef.current) return;
+
+      const defaultRI = getDefaultReflectionIntensity(internalType);
+      setReflectionIntensity(defaultRI);
+      viewer.setReflectionIntensity?.(defaultRI);
+
+      if (internalType === "ACRYLIC") {
+        const glassVis = viewer.getGlassVisibility?.();
+        if (glassVis !== null && glassVis !== undefined) {
+          setGlassVisible(glassVis);
+        } else {
+          viewer.setGlassVisibility?.(glassVisible);
+        }
+      }
+
+      setIsModelLoaded(true);
+      previousSizeRef.current = effectiveSize;
+
+      setStatus(`Scene ready (${effectiveDisplayType}, ${effectiveOrientation}, ${formatSize(effectiveSize)})`);
+    } catch (error) {
+      console.error("[App] reconfigureScene error:", error);
+      setStatus(`Error: ${error.message}`);
+    } finally {
+      // Only stop loading if this is the latest request
+      if (setupRequestIdRef.current === requestId) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -140,59 +242,7 @@ function App() {
       setStatus('Error: Please upload an artwork texture');
       return;
     }
-
-    setIsLoading(true);
-    setStatus('Setting up scene...');
-
-    try {
-      // Get material type info (convert display type to internal type)
-      const { internalType } = getMaterialTypeInfo(materialType);
-      
-      // Get model path based on orientation, material type, and size
-      const modelPath = getModelPath(orientation, materialType, undefined, size);
-      
-      // Determine which HDR to use based on material type
-      // Pass File object directly - EnvironmentManager will handle it
-      const customHdrPath = internalType === 'MIRROR' 
-        ? (hdrMirrorFile || undefined)
-        : (hdrFile || undefined);
-
-      // Pass model path as string (ModelManager handles both File objects and paths)
-      // Pass blob URL for textures and HDR (TextureLoader handles blob URLs fine)
-      // Use internal type for setMaterialType
-      await viewerRef.current?.setup({
-        modelPath: modelPath, // Auto-loaded model path based on orientation and material type
-        artworkTexture: artworkUrl,
-        orientation: orientation, // REQUIRED: portrait or landscape
-        materialType: internalType, // Use internal type for viewer
-        frameTexture: frameUrl || undefined,
-        hdriPath: customHdrPath, // Custom HDR path based on material type
-        mode: currentMode,
-        size: size, // Size object with {width, height}
-      });
-      
-      // Sync glass visibility after setup (if acrylic)
-      if (internalType === 'ACRYLIC' && viewerRef.current) {
-        const glassVis = viewerRef.current.getGlassVisibility();
-        if (glassVis !== null) {
-          setGlassVisible(glassVis);
-        } else {
-          // Set initial visibility
-          viewerRef.current.setGlassVisibility(glassVisible);
-        }
-      }
-      
-      setStatus('Scene ready!');
-      setIsModelLoaded(true); // Mark model as loaded
-      previousSizeRef.current = size; // Update previous size reference
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Setup error:', error);
-      }
-      setStatus(`Error: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
+    await reconfigureScene();
   };
 
   // Update artwork texture
@@ -249,6 +299,18 @@ function App() {
     setStatus(`Mode switched to: ${newMode}`);
   };
 
+  // Normalize metal color to handle various formats (case-insensitive, variants)
+  const normalizeMetalColor = (v) => {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (s === "white" || s === "metal_white" || s === "whitemetal" || s === "metalwhite" || s.includes("white")) {
+      return "white";
+    }
+    if (s === "silver" || s === "brushed_silver" || s === "brushedsilver" || s.includes("silver")) {
+      return "brushed_silver";
+    }
+    return "brushed_silver"; // Safe default
+  };
+
   // Handle USDZ export
   const [isExportingUSDZ, setIsExportingUSDZ] = useState(false);
   const handleExportUSDZ = async () => {
@@ -267,7 +329,50 @@ function App() {
 
     try {
       const filename = `artwork_${materialType.toLowerCase()}_${formatSize(size) || 'default'}.usdz`;
-      await viewerRef.current.exportUSDZ(filename);
+      const { internalType } = getMaterialTypeInfo(materialType);
+      
+      // ✅ BULLETPROOF: Determine export type from display materialType OR from viewer state
+      // Option 1 (best): If materialType is a display export type (METAL_WHITE, METAL_SILVER), use it directly
+      // Option 2: Extract metalColor from mapping and use with internalType
+      // Option 3: Get metalColor from viewer state and normalize it
+      let exportOptions = {};
+      
+      // Check if materialType is already a display export type (METAL_WHITE, METAL_SILVER, etc.)
+      if (materialType === 'METAL_WHITE' || materialType === 'METAL_SILVER' || 
+          materialType === 'METAL_WHITE_BOX' || materialType === 'METAL_SILVER_BOX') {
+        // ✅ Direct export type - no mapping needed (most reliable, eliminates all ambiguity)
+        exportOptions = { exportType: materialType };
+      } else if (internalType === 'METAL' || internalType === 'METAL_BOX') {
+        // ✅ For internal METAL types, try to get metalColor from mapping first, then viewer
+        const materialInfo = getMaterialTypeInfo(materialType);
+        // Note: mapping uses "metalFinish" but export system uses "metalColor"
+        // The mapping's "metalFinish" is actually the metalColor value
+        const metalColorFromMapping = materialInfo.metalFinish; // This is actually the color (white/brushed_silver)
+        const currentMetalColor = viewerRef.current.getMetalColor?.() || null;
+        
+        // Prefer mapping value, fallback to viewer state, then normalize
+        const metalColorToUse = metalColorFromMapping || currentMetalColor;
+        const normalizedMetalColor = normalizeMetalColor(metalColorToUse);
+        
+        exportOptions = {
+          materialType: internalType,
+          metalColor: normalizedMetalColor, // ✅ Normalized to handle various formats
+        };
+      } else {
+        // ✅ For non-metal types, just use internalType
+        exportOptions = { materialType: internalType };
+      }
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log("[App] Exporting USDZ:", {
+          displayMaterialType: materialType,
+          internalType,
+          exportOptions,
+          viewerMetalColor: viewerRef.current.getMetalColor?.(),
+        });
+      }
+      
+      await viewerRef.current.exportUSDZ(filename, exportOptions);
       setStatus('USDZ export completed!');
     } catch (error) {
       console.error('USDZ export error:', error);
@@ -295,7 +400,46 @@ function App() {
 
     try {
       const filename = `artwork_${materialType.toLowerCase()}_${formatSize(size) || 'default'}.glb`;
-      await viewerRef.current.exportGLB(filename);
+      const { internalType } = getMaterialTypeInfo(materialType);
+      
+      // ✅ Same export options as USDZ for consistency
+      // Get current metal color from viewer to ensure correct export type
+      const currentMetalColor = viewerRef.current.getMetalColor?.() || null;
+      
+      // Build export options with material type and metal color
+      let exportOptions = {};
+      
+      // Check if materialType is already a display export type (METAL_WHITE, METAL_SILVER, etc.)
+      if (materialType === 'METAL_WHITE' || materialType === 'METAL_SILVER' || 
+          materialType === 'METAL_WHITE_BOX' || materialType === 'METAL_SILVER_BOX') {
+        // ✅ Direct export type - no mapping needed (most reliable)
+        exportOptions = { exportType: materialType };
+      } else if (internalType === 'METAL' || internalType === 'METAL_BOX') {
+        // ✅ For internal METAL types, get metalColor from viewer and normalize it
+        const materialInfo = getMaterialTypeInfo(materialType);
+        const metalColorFromMapping = materialInfo.metalFinish; // This is actually the color (white/brushed_silver)
+        const metalColorToUse = metalColorFromMapping || currentMetalColor;
+        const normalizedMetalColor = normalizeMetalColor(metalColorToUse);
+        
+        exportOptions = {
+          materialType: internalType,
+          metalColor: normalizedMetalColor, // ✅ Normalized to handle various formats
+        };
+      } else {
+        // ✅ For non-metal types, just use internalType
+        exportOptions = { materialType: internalType };
+      }
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log("[App] Exporting GLB:", {
+          displayMaterialType: materialType,
+          internalType,
+          exportOptions,
+          viewerMetalColor: viewerRef.current.getMetalColor?.(),
+        });
+      }
+      
+      await viewerRef.current.exportGLB(filename, exportOptions);
       setStatus('GLB export completed!');
     } catch (error) {
       console.error('GLB export error:', error);
@@ -307,144 +451,54 @@ function App() {
 
   // Handle orientation change
   const handleOrientationChange = async (newOrientation) => {
+    // Check if orientation is available for current material
+    if (!isOrientationAvailableForMaterial(newOrientation, materialType)) {
+      setStatus(`Error: ${newOrientation} orientation is only available for ACRYLIC material`);
+      return;
+    }
+
     setOrientation(newOrientation);
-    // Update size to default for new orientation
-    const newDefaultSize = newOrientation === ORIENTATION_TYPES.PORTRAIT 
-      ? DEFAULT_SIZES.PORTRAIT 
-      : DEFAULT_SIZES.LANDSCAPE;
+
+    // Get default size for the orientation
+    let newDefaultSize;
+    if (newOrientation === ORIENTATION_TYPES.PORTRAIT) {
+      newDefaultSize = DEFAULT_SIZES.PORTRAIT;
+    } else if (newOrientation === ORIENTATION_TYPES.LANDSCAPE) {
+      newDefaultSize = DEFAULT_SIZES.LANDSCAPE;
+    } else if (newOrientation === ORIENTATION_TYPES.SURFBOARD) {
+      newDefaultSize = DEFAULT_SIZES.SURFBOARD;
+    } else if (newOrientation === ORIENTATION_TYPES.SKATEBOARD) {
+      newDefaultSize = DEFAULT_SIZES.SKATEBOARD;
+    } else {
+      newDefaultSize = DEFAULT_SIZES.PORTRAIT; // fallback
+    }
+
     setSize(newDefaultSize);
     setStatus(`Orientation changed to: ${newOrientation}...`);
-    
-    // If artwork is already loaded, automatically call setup to reconfigure pipeline
-    if (artworkUrl && viewerRef.current) {
-      if (typeof viewerRef.current.setup !== 'function') {
-        setStatus(`Orientation changed to: ${newOrientation} - Setup function not available`);
-        return;
-      }
-      
-      setIsLoading(true);
-      try {
-        const { internalType } = getMaterialTypeInfo(materialType);
-        const newModelPath = getModelPath(newOrientation, materialType, undefined, newDefaultSize);
-        const customHdrPath = internalType === 'MIRROR' 
-          ? (hdrMirrorFile || undefined)
-          : (hdrFile || undefined);
-        
-        await viewerRef.current.setup({
-          modelPath: newModelPath,
-          artworkTexture: artworkUrl,
-          orientation: newOrientation,
-          materialType: internalType,
-          frameTexture: frameUrl || undefined,
-          hdriPath: customHdrPath,
-          mode: currentMode,
-          size: newDefaultSize,
-        });
-        
-        const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
-        if (viewerRef.current && typeof viewerRef.current.setReflectionIntensity === 'function') {
-          viewerRef.current.setReflectionIntensity(defaultReflectionIntensity);
-        }
-        
-        setStatus(`Orientation changed to: ${newOrientation} - Scene reconfigured`);
-        setIsModelLoaded(true); // Mark model as loaded
-        previousSizeRef.current = newDefaultSize; // Update previous size reference
-      } catch (error) {
-        if (process.env.NODE_ENV === 'development') {
-          console.error('Failed to reconfigure scene with new orientation:', error);
-        }
-        setStatus(`Error: Failed to load model for ${newOrientation} - ${error.message}`);
-      } finally {
-        setIsLoading(false);
-      }
-    }
+
+    await reconfigureScene({ newOrientation, newSize: newDefaultSize });
   };
 
   // Change material type
   const handleMaterialChange = async (displayType) => {
-    // Get internal type and metal finish from display type
     const { internalType } = getMaterialTypeInfo(displayType);
+    
+    // If current orientation is Surfboard or Skateboard and new material is not ACRYLIC, switch to Portrait
+    if ((orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) && internalType !== "ACRYLIC") {
+      setOrientation(ORIENTATION_TYPES.PORTRAIT);
+      setSize(DEFAULT_SIZES.PORTRAIT);
+      setStatus(`Material changed to: ${displayType}. Orientation switched to Portrait (Surfboard/Skateboard only available for Acrylic)`);
+    } else {
+      setStatus(`Material changed to: ${displayType} (click "Setup Scene" to apply)`);
+    }
     
     setMaterialType(displayType);
     
-    // Update reflection intensity to material-specific default
     const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
     setReflectionIntensity(defaultReflectionIntensity);
     
-    setStatus(`Material changed to: ${displayType}...`);
-    
-    // If artwork is already loaded, automatically call setup to reconfigure pipeline for new material type
-    if (artworkUrl) {
-      if (!viewerRef.current) {
-        setStatus(`Material changed to: ${displayType} - Waiting for viewer...`);
-        // Retry after a short delay
-        setTimeout(() => handleMaterialChange(displayType), 500);
-        return;
-      }
-      
-      if (typeof viewerRef.current.setup !== 'function') {
-        setStatus(`Material changed to: ${displayType} - Setup function not available`);
-        return;
-      }
-      
-      setIsLoading(true);
-      try {
-        // Get new model path based on orientation, display type, and size
-        const newModelPath = getModelPath(orientation, displayType, undefined, size);
-        
-        // Determine which HDR to use based on internal material type
-        const customHdrPath = internalType === 'MIRROR' 
-          ? (hdrMirrorFile || undefined)
-          : (hdrFile || undefined);
-        
-        
-        // Automatically call setup to reconfigure the entire pipeline for the new material type
-        // This ensures all material-specific configurations are properly applied
-        await viewerRef.current.setup({
-          modelPath: newModelPath,
-          artworkTexture: artworkUrl,
-          orientation: orientation, // REQUIRED: portrait or landscape
-          materialType: internalType, // Use internal type for viewer
-          frameTexture: frameUrl || undefined,
-          hdriPath: customHdrPath,
-          mode: currentMode,
-          size: size,
-        });
-        
-        // Update reflection intensity after setup (setup may reset it)
-        if (viewerRef.current && typeof viewerRef.current.setReflectionIntensity === 'function') {
-          viewerRef.current.setReflectionIntensity(defaultReflectionIntensity);
-        }
-        
-        // Sync glass visibility after setup (if acrylic)
-        if (internalType === 'ACRYLIC' && viewerRef.current) {
-          const glassVis = viewerRef.current.getGlassVisibility();
-          if (glassVis !== null) {
-            setGlassVisible(glassVis);
-          } else if (typeof viewerRef.current.setGlassVisibility === 'function') {
-            viewerRef.current.setGlassVisibility(glassVisible);
-          }
-        }
-        
-        setStatus(`Material changed to: ${displayType} - Scene reconfigured automatically`);
-        setIsModelLoaded(true); // Mark model as loaded
-        previousSizeRef.current = size; // Update previous size reference
-      } catch (error) {
-        if (process.env.NODE_ENV === 'development') {
-          console.error('Failed to reconfigure scene with new material:', error);
-        }
-        setStatus(`Error: Failed to load model for ${displayType} - ${error.message}`);
-      } finally {
-        setIsLoading(false);
-      }
-    } else {
-      // No artwork loaded yet - just update the material type
-      // Setup will be called automatically when artwork is uploaded
-      if (viewerRef.current && typeof viewerRef.current.setMaterialType === 'function') {
-        viewerRef.current.setMaterialType(internalType);
-      }
-      setStatus(`Material changed to: ${displayType} - Upload artwork to load model`);
-    }
+    // ✅ Don't auto-setup scene - user must click "Setup Scene" button
+    // await reconfigureScene({ displayType });
   };
 
   // Handle reflection intensity change
@@ -641,16 +695,71 @@ function App() {
               </div>
             )}
           </div>
+
+          {/* HDR upload */}
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
+              HDR Environment (Optional)
+            </label>
+            <input
+              type="file"
+              accept=".hdr,image/vnd.radiance"
+              onChange={handleHdrUpload}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '11px',
+                backgroundColor: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            />
+            {hdrFile && (
+              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
+                ✓ {hdrFile.name}
+              </div>
+            )}
+          </div>
+
+          {/* Mirror HDR upload */}
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '11px' }}>
+              Mirror HDR (Optional)
+            </label>
+            <input
+              type="file"
+              accept=".hdr,image/vnd.radiance"
+              onChange={handleHdrMirrorUpload}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '11px',
+                backgroundColor: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            />
+            {hdrMirrorFile && (
+              <div style={{ fontSize: '10px', color: '#4CAF50', marginTop: '5px' }}>
+                ✓ {hdrMirrorFile.name}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Orientation Selection */}
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>Orientation</h3>
-          <div style={{ display: 'flex', gap: '5px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
             <button
               onClick={() => handleOrientationChange(ORIENTATION_TYPES.PORTRAIT)}
               style={{
                 flex: 1,
+                minWidth: '100px',
                 padding: '10px',
                 backgroundColor: orientation === ORIENTATION_TYPES.PORTRAIT ? '#4CAF50' : '#666',
                 color: 'white',
@@ -667,6 +776,7 @@ function App() {
               onClick={() => handleOrientationChange(ORIENTATION_TYPES.LANDSCAPE)}
               style={{
                 flex: 1,
+                minWidth: '100px',
                 padding: '10px',
                 backgroundColor: orientation === ORIENTATION_TYPES.LANDSCAPE ? '#4CAF50' : '#666',
                 color: 'white',
@@ -679,14 +789,65 @@ function App() {
             >
               Landscape
             </button>
+            <button
+              onClick={() => handleOrientationChange(ORIENTATION_TYPES.SURFBOARD)}
+              disabled={!isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType)}
+              style={{
+                flex: 1,
+                minWidth: '100px',
+                padding: '10px',
+                backgroundColor: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType) 
+                  ? '#333' 
+                  : orientation === ORIENTATION_TYPES.SURFBOARD ? '#4CAF50' : '#666',
+                color: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType) ? '#666' : 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType) ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                opacity: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType) ? 0.5 : 1,
+              }}
+              title={!isOrientationAvailableForMaterial(ORIENTATION_TYPES.SURFBOARD, materialType) ? 'Surfboard is only available for Acrylic material' : 'Surfboard'}
+            >
+              Surfboard
+            </button>
+            <button
+              onClick={() => handleOrientationChange(ORIENTATION_TYPES.SKATEBOARD)}
+              disabled={!isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType)}
+              style={{
+                flex: 1,
+                minWidth: '100px',
+                padding: '10px',
+                backgroundColor: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType) 
+                  ? '#333' 
+                  : orientation === ORIENTATION_TYPES.SKATEBOARD ? '#4CAF50' : '#666',
+                color: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType) ? '#666' : 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType) ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                opacity: !isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType) ? 0.5 : 1,
+              }}
+              title={!isOrientationAvailableForMaterial(ORIENTATION_TYPES.SKATEBOARD, materialType) ? 'Skateboard is only available for Acrylic material' : 'Skateboard'}
+            >
+              Skateboard
+            </button>
           </div>
+          {(orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) && (
+            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px', fontSize: '10px', color: '#4CAF50' }}>
+              ⓘ {orientation === ORIENTATION_TYPES.SURFBOARD ? 'Surfboard' : 'Skateboard'} orientation is only available for Acrylic material
+            </div>
+          )}
         </div>
 
         {/* Size Selection */}
         <div style={{ marginBottom: '20px' }}>
           <h3 style={{ color: '#FFC107', marginTop: 0 }}>Size</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            {(orientation === ORIENTATION_TYPES.PORTRAIT ? EXAMPLE_SIZES.PORTRAIT : EXAMPLE_SIZES.LANDSCAPE).map((sizeOption) => (
+            {((orientation === ORIENTATION_TYPES.PORTRAIT || orientation === ORIENTATION_TYPES.LANDSCAPE) 
+              ? (orientation === ORIENTATION_TYPES.PORTRAIT ? EXAMPLE_SIZES.PORTRAIT : EXAMPLE_SIZES.LANDSCAPE)
+              : []).map((sizeOption) => (
               <button
                 key={sizeOption.label}
                 onClick={() => {
@@ -712,6 +873,11 @@ function App() {
                 {sizeOption.label}
               </button>
             ))}
+            {(orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) && (
+              <div style={{ padding: '8px', backgroundColor: 'rgba(76, 175, 80, 0.1)', borderRadius: '4px', fontSize: '10px', color: '#4CAF50' }}>
+                Default size: {formatSize(orientation === ORIENTATION_TYPES.SURFBOARD ? DEFAULT_SIZES.SURFBOARD : DEFAULT_SIZES.SKATEBOARD)}
+              </div>
+            )}
           </div>
           <div style={{ marginTop: '10px', padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
             <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '5px' }}>

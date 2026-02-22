@@ -13,11 +13,17 @@ export function useMaterialUpdates({
   materialType,
   lighting,
   isLoadingRef = null, // Optional ref to track loading state
+  pipelineRef = null, // Optional: pipeline barrier ref to prevent premature applies
 }) {
   // Track previous material type to detect MIRROR changes
   const previousMaterialTypeRef = useRef(materialType.activeMaterialType);
   // Update reflection intensity - handled by material module (including acrylics)
   useEffect(() => {
+    // ✅ Guard: Only apply if pipeline is finalized (applied === true)
+    if (pipelineRef?.current && pipelineRef.current.applied !== true) {
+      return; // Skip during initialization - wait for tryFinalizeAndApply
+    }
+
     const model = modelManagerRef.current?.getModel();
     if (!model || !materialType.materialModuleRef.current) return;
 
@@ -35,11 +41,13 @@ export function useMaterialUpdates({
     } else if (materialModule.updateReflectionIntensity) {
       // Update reflection intensity for other material types
       const renderer = sceneManagerRef.current?.getRenderer();
+      // For WOOD: pass showReflections parameter (other modules may ignore it)
       materialModule.updateReflectionIntensity(
         model,
         lighting.reflectionIntensity,
         materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
-        renderer
+        renderer,
+        lighting.showReflections // Pass showReflections for WOOD compatibility
       );
     }
     // Animation loop handles rendering automatically - no need for manual render
@@ -48,6 +56,11 @@ export function useMaterialUpdates({
   // Update metal finish and color - handled by material module (only for METAL and METAL_BOX)
   // SINGLE SOURCE OF TRUTH: applyMetalState handles both finish and color changes
   useEffect(() => {
+    // ✅ Guard: Only apply if pipeline is finalized (applied === true)
+    if (pipelineRef?.current && pipelineRef.current.applied !== true) {
+      return; // Skip during initialization - wait for tryFinalizeAndApply
+    }
+
     const model = modelManagerRef.current?.getModel();
     if (!model || !materialType.materialModuleRef.current) return;
 
@@ -118,6 +131,11 @@ export function useMaterialUpdates({
 
   // Re-apply materials when material type changes (skip for acrylics)
   useEffect(() => {
+    // ✅ Guard: Only apply if pipeline is finalized (applied === true)
+    if (pipelineRef?.current && pipelineRef.current.applied !== true) {
+      return; // Skip during initialization - wait for tryFinalizeAndApply
+    }
+    
     // Skip if model is currently loading
     if (isLoadingRef?.current) {
       return;
@@ -198,6 +216,11 @@ export function useMaterialUpdates({
 
   // Toggle environment map - handled by material module (skip for acrylics)
   useEffect(() => {
+    // ✅ Guard: Only apply if pipeline is finalized (applied === true)
+    if (pipelineRef?.current && pipelineRef.current.applied !== true) {
+      return; // Skip during initialization - wait for tryFinalizeAndApply
+    }
+    
     const scene = sceneManagerRef.current?.getScene();
     const envMap = environmentManagerRef.current?.getEnvironmentMap();
     const model = modelManagerRef.current?.getModel();
