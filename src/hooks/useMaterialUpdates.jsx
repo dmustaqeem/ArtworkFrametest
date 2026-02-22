@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { getHDRIPath } from "../config/appConfig.jsx";
+import { getMaterialModule } from "../materials/index.js";
+import { applyMirrorState } from "../materials/MirrorMaterial.jsx";
 
 /**
  * Custom hook to consolidate all material update effects
@@ -41,13 +43,11 @@ export function useMaterialUpdates({
     } else if (materialModule.updateReflectionIntensity) {
       // Update reflection intensity for other material types
       const renderer = sceneManagerRef.current?.getRenderer();
-      // For WOOD: pass showReflections parameter (other modules may ignore it)
       materialModule.updateReflectionIntensity(
         model,
         lighting.reflectionIntensity,
         materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map(),
-        renderer,
-        lighting.showReflections // Pass showReflections for WOOD compatibility
+        renderer
       );
     }
     // Animation loop handles rendering automatically - no need for manual render
@@ -99,31 +99,69 @@ export function useMaterialUpdates({
     const isSwitchingToMirror = activeMaterialType === "MIRROR" && previousType !== "MIRROR";
     const isSwitchingFromMirror = activeMaterialType !== "MIRROR" && previousType === "MIRROR";
     
-    if ((isSwitchingToMirror || isSwitchingFromMirror) && environmentManagerRef.current) {
-      const hdriPath = getHDRIPath(activeMaterialType);
-      const model = modelManagerRef.current?.getModel();
-      
-      environmentManagerRef.current.loadHDRI(
-        hdriPath,
-        (newEnvMap) => {
-          // Update materials with new environment map
-          if (model && materialType.materialModuleRef.current?.updateMaterials) {
-            materialType.materialModuleRef.current.updateMaterials(
-              model,
-              newEnvMap,
-              lighting.showReflections,
-              lighting.reflectionIntensity,
-              materialProcessorRef.current?.getBaseEnvMapIntensities() || new Map()
-            );
-          }
-        },
-        (error) => {
-          if (process.env.NODE_ENV === 'development') {
-            console.error("Failed to load HDRI for material type:", error);
-          }
-        }
+    // ✅ Early return if not switching to/from mirror
+    if (!isSwitchingToMirror && !isSwitchingFromMirror) {
+      previousMaterialTypeRef.current = activeMaterialType;
+      return;
+    }
+    
+    const model = modelManagerRef.current?.getModel();
+    const renderer = sceneManagerRef.current?.getRenderer?.();
+    if (!model || !renderer || !environmentManagerRef.current) {
+      previousMaterialTypeRef.current = activeMaterialType;
+      return;
+    }
+    
+    // ✅ Capture targetType and targetModule at effect time (not in async callback)
+    const targetType = activeMaterialType;
+    const targetModule = getMaterialModule(targetType); // strict resolver
+    const hdriPath = getHDRIPath(targetType);
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log("[HDRI CALLBACK]",
+        "targetType", targetType,
+        "currentType", materialType.activeMaterialTypeRef.current,
+        "usingModule", targetModule?.name || "unknown"
       );
     }
+    
+    environmentManagerRef.current.loadHDRI(
+      hdriPath,
+      (newEnvMap) => {
+        // ✅ Ignore stale HDRI callbacks - only apply if we're still on the same type
+        if (materialType.activeMaterialTypeRef.current !== targetType) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log("[HDRI CALLBACK] Ignoring stale callback - type changed from", targetType, "to", materialType.activeMaterialTypeRef.current);
+          }
+          return;
+        }
+        
+        // ✅ For MIRROR: use applyMirrorState (single source of truth)
+        if (targetType === "MIRROR" && targetModule.applyMirrorState) {
+          applyMirrorState(model, renderer, {
+            reflectionIntensity: lighting.reflectionIntensity,
+            showReflections: lighting.showReflections,
+            envMap: newEnvMap,
+            baseEnvMapIntensities: materialProcessorRef.current?.getBaseEnvMapIntensities?.() || new Map(),
+          });
+        } else if (targetModule.updateMaterials) {
+          // For other types: use updateMaterials
+          targetModule.updateMaterials(
+            model,
+            newEnvMap,
+            lighting.showReflections,
+            lighting.reflectionIntensity,
+            materialProcessorRef.current?.getBaseEnvMapIntensities?.() || new Map(),
+            renderer
+          );
+        }
+      },
+      (error) => {
+        if (process.env.NODE_ENV === 'development') {
+          console.error("Failed to load HDRI for material type:", error);
+        }
+      }
+    );
     
     // Update previous material type
     previousMaterialTypeRef.current = activeMaterialType;
@@ -149,8 +187,29 @@ export function useMaterialUpdates({
     materialType.activeMaterialTypeRef.current = activeMaterialType;
     materialType.setDetectedMaterialType(activeMaterialType);
 
-    // Skip all processing for acrylics - render as-is
+    // ✅ For ACRYLIC: explicitly apply acrylic reflection policy to reassert correct values
+    // This prevents acrylic from inheriting wrong reflection intensity from previous type
     if (activeMaterialType === "ACRYLIC") {
+      const envMap = environmentManagerRef.current?.getEnvironmentMap();
+      const acrylicModule = getMaterialModule("ACRYLIC"); // strict resolver
+      materialType.materialModuleRef.current = acrylicModule;
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log("[ACRYLIC SWITCH] reassert acrylic policy", "refl", lighting.reflectionIntensity);
+      }
+      
+      if (envMap && acrylicModule.applyArtworkMatteGlassGlossy) {
+        acrylicModule.applyArtworkMatteGlassGlossy(model, envMap, lighting.reflectionIntensity);
+      } else if (acrylicModule.updateMaterials) {
+        acrylicModule.updateMaterials(
+          model,
+          envMap,
+          lighting.showReflections,
+          lighting.reflectionIntensity,
+          materialProcessorRef.current?.getBaseEnvMapIntensities?.() || new Map(),
+          renderer
+        );
+      }
       return;
     }
 

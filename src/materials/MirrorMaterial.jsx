@@ -291,14 +291,14 @@ export const applyMirrorState = (
       finalMat.userData.__mirrorEnvBase = baseFromPreset;
 
       // ✅ Intensity policy (showReflections OFF => 0, ON => base * reflectionIntensity)
-      // ✅ CRITICAL FIX: Prioritize userData (survives material replacement) over Map lookup
       // Use __baseEnvIntensity (standardized) with fallback to __mirrorEnvBase (backward compat)
-      const baseFromUserData = finalMat.userData.__baseEnvIntensity ?? finalMat.userData.__mirrorEnvBase;
-      const baseFromMap = baseEnvMapIntensities?.get ? baseEnvMapIntensities.get(finalMat) : undefined;
-      
-      // Prioritize userData over Map (userData survives material replacement)
-      const resolvedBase = typeof baseFromUserData === "number" ? baseFromUserData : 
-                          (typeof baseFromMap === "number" ? baseFromMap : 1.0);
+      const base = finalMat.userData.__baseEnvIntensity ?? finalMat.userData.__mirrorEnvBase ?? 1.0;
+
+      // (Optional compatibility: if you *really* want to respect baseEnvMapIntensities if present)
+      const externalBase =
+        baseEnvMapIntensities?.get ? baseEnvMapIntensities.get(finalMat) : undefined;
+
+      const resolvedBase = typeof externalBase === "number" ? externalBase : base;
 
       finalMat.envMapIntensity = showReflections ? (resolvedBase * reflectionIntensity) : 0.0;
 

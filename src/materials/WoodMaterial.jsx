@@ -61,25 +61,6 @@ export const classifyMaterial = ({ meshName, material, materialType }) => {
 };
 
 /**
- * Helper to resolve base environment intensity for wood materials
- * Reads from userData first (survives material replacement), then falls back to Map
- */
-const resolveWoodBaseEnv = (mat, baseEnvMapIntensities) => {
-  const baseFromUserData =
-    mat?.userData?.__baseEnvIntensity ??
-    mat?.userData?.__woodEnvBase;
-
-  if (typeof baseFromUserData === "number") return baseFromUserData;
-
-  const baseFromMap =
-    baseEnvMapIntensities?.get ? baseEnvMapIntensities.get(mat) : undefined;
-
-  if (typeof baseFromMap === "number") return baseFromMap;
-
-  return 0.05; // WOOD default envBase
-};
-
-/**
  * Applies wood material preset
  * @param {THREE.Material} material - The material to apply preset to
  * @param {Object} preset - The preset configuration
@@ -91,16 +72,6 @@ export const applyWoodPreset = (material, preset, renderer, role, options = {}) 
   // Use BaseMaterial's applyPreset to handle material upgrades and properties
   // BaseMaterial will handle downgrading PhysicalMaterial to StandardMaterial for PRINT if needed
   const updatedMat = applyPreset(material, preset, renderer, role, options);
-  
-  // ✅ LOCK + persist base env intensity on the material itself (survives material replacement)
-  // ✅ CRITICAL FIX (Option B): Always stamp lock + base, even if already set
-  // This ensures first-run correctness even if processModelMaterials ran with wrong materialType
-  updatedMat.userData = updatedMat.userData || {};
-  updatedMat.userData.__lockSystem = "WOOD"; // Always set (don't skip if already WOOD)
-  
-  const baseFromPreset = typeof preset.envBase === "number" ? preset.envBase : 0.05;
-  updatedMat.userData.__baseEnvIntensity = baseFromPreset; // Always set (don't skip if already set)
-  updatedMat.userData.__woodEnvBase = baseFromPreset;      // optional backward compat
   
   // For PRINT role (artwork layer), ensure texture is visible
   if (role === "PRINT") {
@@ -197,60 +168,41 @@ export const updateWoodMaterials = (model, envMap, showReflections, reflectionIn
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       mats.forEach((mat) => {
         applyWoodBackSettings(mat);
-        // ✅ lock back too
-        mat.userData = mat.userData || {};
-        mat.userData.__lockSystem = "WOOD";
-        mat.userData.__baseEnvIntensity = 0.0;
       });
       return; // IMPORTANT: don't let generic env logic touch it
     }
     
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
-      if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
-
-      mat.userData = mat.userData || {};
-      // ✅ CRITICAL FIX (Option B): Always stamp WOOD lock + base, even if missing
-      // This ensures first-run correctness even if processModelMaterials ran with wrong materialType
-      if (mat.userData.__lockSystem !== "WOOD") {
-        mat.userData.__lockSystem = "WOOD";
+      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        mat.envMap = null; // Use scene.environment
+        
+        // Update environment map intensity
+        const baseIntensity = baseEnvMapIntensities.get(mat);
+        if (baseIntensity !== undefined) {
+          // For wood, ensure very low reflections even with reflection intensity slider
+          // Cap the final intensity to keep it matte
+          const finalIntensity = Math.min(baseIntensity * reflectionIntensity, 0.1);
+          mat.envMapIntensity = finalIntensity;
+        }
+        
+        // Ensure high roughness for matte finish
+        if (mat.roughness !== undefined && mat.roughness < 0.9) {
+          mat.roughness = 0.95;
+        }
+        
+        // Ensure no clearcoat for matte finish
+        if (mat.clearcoat !== undefined && mat.clearcoat > 0) {
+          mat.clearcoat = 0;
+        }
+        
+        // Ensure low specular intensity for matte finish
+        if (mat.specularIntensity !== undefined && mat.specularIntensity > 0.1) {
+          mat.specularIntensity = 0.05;
+        }
+        
+        mat.needsUpdate = true;
       }
-      // ✅ Always ensure base is set (don't rely on it being there from processModelMaterials)
-      if (!mat.userData.__baseEnvIntensity) {
-        mat.userData.__baseEnvIntensity = 0.05; // WOOD default
-      }
-
-      mat.envMap = null; // Use scene.environment
-
-      // ✅ Use helper to resolve base intensity (survives material replacement)
-      const baseIntensity = resolveWoodBaseEnv(mat, baseEnvMapIntensities);
-
-      // ✅ reflections policy: showReflections OFF => 0
-      if (!showReflections) {
-        mat.envMapIntensity = 0.0;
-      } else {
-        // For wood, ensure very low reflections even with reflection intensity slider
-        // Cap the final intensity to keep it matte
-        const finalIntensity = Math.min(baseIntensity * reflectionIntensity, 0.1);
-        mat.envMapIntensity = finalIntensity;
-      }
-      
-      // Ensure high roughness for matte finish
-      if (mat.roughness !== undefined && mat.roughness < 0.9) {
-        mat.roughness = 0.95;
-      }
-      
-      // Ensure no clearcoat for matte finish
-      if (mat.clearcoat !== undefined && mat.clearcoat > 0) {
-        mat.clearcoat = 0;
-      }
-      
-      // Ensure low specular intensity for matte finish
-      if (mat.specularIntensity !== undefined && mat.specularIntensity > 0.1) {
-        mat.specularIntensity = 0.05;
-      }
-      
-      mat.needsUpdate = true;
     });
   });
 };
@@ -258,7 +210,7 @@ export const updateWoodMaterials = (model, envMap, showReflections, reflectionIn
 /**
  * Updates wood materials when reflection intensity changes
  */
-export const updateWoodReflectionIntensity = (model, reflectionIntensity, baseEnvMapIntensities, renderer, showReflections = true) => {
+export const updateWoodReflectionIntensity = (model, reflectionIntensity, baseEnvMapIntensities) => {
   if (!model) return;
   
   model.traverse((obj) => {
@@ -269,56 +221,38 @@ export const updateWoodReflectionIntensity = (model, reflectionIntensity, baseEn
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       mats.forEach((mat) => {
         applyWoodBackSettings(mat);
-        mat.userData = mat.userData || {};
-        mat.userData.__lockSystem = "WOOD";
-        mat.userData.__baseEnvIntensity = 0.0;
       });
       return; // IMPORTANT: don't let generic env logic touch it
     }
     
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     mats.forEach((mat) => {
-      if (!(mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return;
-
-      mat.userData = mat.userData || {};
-      // ✅ CRITICAL FIX (Option B): Always stamp WOOD lock + base, even if missing
-      // This ensures first-run correctness even if processModelMaterials ran with wrong materialType
-      if (mat.userData.__lockSystem !== "WOOD") {
-        mat.userData.__lockSystem = "WOOD";
+      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        const baseIntensity = baseEnvMapIntensities.get(mat);
+        if (baseIntensity !== undefined) {
+          // For wood, ensure very low reflections even with reflection intensity slider
+          // Cap the final intensity to keep it matte
+          const finalIntensity = Math.min(baseIntensity * reflectionIntensity, 0.1);
+          mat.envMapIntensity = finalIntensity;
+        }
+        
+        // Ensure high roughness for matte finish
+        if (mat.roughness !== undefined && mat.roughness < 0.9) {
+          mat.roughness = 0.95;
+        }
+        
+        // Ensure no clearcoat for matte finish
+        if (mat.clearcoat !== undefined && mat.clearcoat > 0) {
+          mat.clearcoat = 0;
+        }
+        
+        // Ensure low specular intensity for matte finish
+        if (mat.specularIntensity !== undefined && mat.specularIntensity > 0.1) {
+          mat.specularIntensity = 0.05;
+        }
+        
+        mat.needsUpdate = true;
       }
-      // ✅ Always ensure base is set (don't rely on it being there from processModelMaterials)
-      if (!mat.userData.__baseEnvIntensity) {
-        mat.userData.__baseEnvIntensity = 0.05; // WOOD default
-      }
-
-      // ✅ Use helper to resolve base intensity (survives material replacement)
-      const baseIntensity = resolveWoodBaseEnv(mat, baseEnvMapIntensities);
-
-      if (!showReflections) {
-        mat.envMapIntensity = 0.0;
-      } else {
-        // For wood, ensure very low reflections even with reflection intensity slider
-        // Cap the final intensity to keep it matte
-        const finalIntensity = Math.min(baseIntensity * reflectionIntensity, 0.1);
-        mat.envMapIntensity = finalIntensity;
-      }
-      
-      // Ensure high roughness for matte finish
-      if (mat.roughness !== undefined && mat.roughness < 0.9) {
-        mat.roughness = 0.95;
-      }
-      
-      // Ensure no clearcoat for matte finish
-      if (mat.clearcoat !== undefined && mat.clearcoat > 0) {
-        mat.clearcoat = 0;
-      }
-      
-      // Ensure low specular intensity for matte finish
-      if (mat.specularIntensity !== undefined && mat.specularIntensity > 0.1) {
-        mat.specularIntensity = 0.05;
-      }
-      
-      mat.needsUpdate = true;
     });
   });
 };

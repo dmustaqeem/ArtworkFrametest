@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useImperativeHandle } from "react";
 import * as THREE from "three";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
-import { registerMaterialLightingDefaults, getMaterialModule } from "../materials/index.js";
+import { registerMaterialLightingDefaults } from "../materials/index.js";
 import { createLightingManager } from "../lighting/index.jsx";
 import {
   createSceneManager,
@@ -287,29 +287,15 @@ export function useArtworkViewer({
       const name = obj.name.toLowerCase();
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
 
-      // Check for artwork meshes - including Surfboard/Skateboard "Front_Art" naming
       const isArtwork =
         name === "artwork_fullbleed" ||
         name === "artwork_shrunk" ||
-        name === "front_art" || // Surfboard/Skateboard artwork mesh
         (name.includes("artwork") &&
-          (name.includes("fullbleed") || name.includes("full_bleed") || name.includes("shrunk"))) ||
-        (name.includes("front") && name.includes("art")); // Alternative pattern
+          (name.includes("fullbleed") || name.includes("full_bleed") || name.includes("shrunk")));
 
       const isGlass =
         name === "glass" ||
-        name.includes("glass") ||
-        name.includes("cover") ||
-        name.includes("plexi") ||
-        name.includes("acrylic_cover");
-      
-      // Check for back meshes - ensure they're visible
-      // For Surfboard/Skateboard: "Base" is the back mesh
-      const isBack =
-        name.includes("back") || name.includes("rear") ||
-        name === "base" || // Surfboard/Skateboard back mesh
-        ((name.includes("surfboard") || name.includes("skateboard")) && 
-         (name.includes("back") || name.includes("rear")));
+        name.includes("glass");
 
       // Artwork: reflective with clearcoat (HDR reflections) but colors stay sharp
       if (isArtwork) {
@@ -401,119 +387,6 @@ export function useArtworkViewer({
           m.depthWrite = false;
           m.depthTest = true;
           m.side = THREE.DoubleSide; // Visible from both sides
-          
-          m.needsUpdate = true;
-        });
-        return; // Skip further processing for glass
-      }
-
-      // Back meshes: ensure visibility and apply acrylic back settings
-      // For Surfboard/Skateboard: "Base" mesh gets completely white material
-      if (isBack) {
-        // Ensure back mesh is visible
-        obj.visible = true;
-        
-        // Special handling for Surfboard/Skateboard "Base" mesh - make it completely white
-        const isSurfboardSkateboardBase = name === "base";
-        
-        mats.forEach((m) => {
-          if (!m) return;
-          
-          // Apply acrylic back material settings (bright, matte, no reflections)
-          if (!m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial) {
-            // Upgrade to StandardMaterial if needed
-            const upgraded = new THREE.MeshStandardMaterial();
-            THREE.MeshStandardMaterial.prototype.copy.call(upgraded, m);
-            Object.assign(m, upgraded);
-          }
-          
-          // For Surfboard/Skateboard Base mesh: completely white (pure white, no brightness multiplier)
-          // For other back meshes: bright white appearance
-          if (m.color) {
-            if (isSurfboardSkateboardBase) {
-              // Completely white for Surfboard/Skateboard
-              m.color.setRGB(1.0, 1.0, 1.0);
-            } else {
-              // Bright white for other back meshes
-              m.color.setRGB(3.0, 3.0, 3.0);
-            }
-          }
-          
-          // Matte finish
-          if ("metalness" in m) m.metalness = 0.0;
-          if ("roughness" in m) m.roughness = 0.8;
-          
-          // No reflections
-          m.envMap = null;
-          if ("envMapIntensity" in m) m.envMapIntensity = 0.0;
-          
-          // Remove transmission/glass properties
-          if (m.isMeshPhysicalMaterial) {
-            m.transmission = 0;
-            m.thickness = 0;
-            m.ior = 1.0;
-            m.clearcoat = 0.0;
-            m.clearcoatRoughness = 1.0;
-          }
-          
-          // Remove specular highlights
-          if ("clearcoat" in m) m.clearcoat = 0.0;
-          if ("clearcoatRoughness" in m) m.clearcoatRoughness = 1.0;
-          if ("specularIntensity" in m) m.specularIntensity = 0.0;
-          
-          // Remove any texture maps for completely white appearance (Surfboard/Skateboard only)
-          if (isSurfboardSkateboardBase) {
-            m.map = null;
-            m.normalMap = null;
-            m.bumpMap = null;
-            m.roughnessMap = null;
-            m.metalnessMap = null;
-            m.aoMap = null;
-            m.emissiveMap = null;
-          }
-          
-          m.toneMapped = true;
-          m.needsUpdate = true;
-        });
-        return; // Skip further processing for back meshes
-      }
-
-      // For other meshes (not artwork, glass, or back), apply acrylic material with reflections
-      // This ensures all meshes get proper acrylic treatment
-      if (!isArtwork && !isGlass && !isBack) {
-        mats.forEach((m) => {
-          if (!m) return;
-          
-          // Ensure it's a PhysicalMaterial for acrylic properties
-          if (!m.isMeshPhysicalMaterial && m.isMeshStandardMaterial) {
-            const upgraded = new THREE.MeshPhysicalMaterial();
-            THREE.MeshStandardMaterial.prototype.copy.call(upgraded, m);
-            Object.assign(m, upgraded);
-            m.isMeshPhysicalMaterial = true;
-          }
-          
-          // Apply acrylic material properties with reflections
-          if (m.isMeshPhysicalMaterial) {
-            // Enable transmission for glass-like appearance
-            m.transmission = 0.85;
-            m.thickness = 0.005;
-            m.ior = 1.49;
-            
-            // Clearcoat for glossy reflections
-            m.clearcoat = 0.9;
-            m.clearcoatRoughness = 0.1;
-            
-            // Low roughness for some base reflection
-            if ("roughness" in m) m.roughness = 0.08;
-            if ("metalness" in m) m.metalness = 0.0;
-            
-            // Use scene.environment for HDR reflections
-            m.envMap = null; // This makes it use scene.environment
-            if ("envMapIntensity" in m) m.envMapIntensity = reflectionIntensity * 1.2;
-            
-            // White base color
-            if (m.color) m.color.setRGB(0.98, 0.98, 0.98);
-          }
           
           m.needsUpdate = true;
         });
@@ -854,28 +727,11 @@ export function useArtworkViewer({
         return;
       }
 
-      // ✅ CRITICAL VALIDATION: Ensure module preset matches activeType before creating MaterialProcessor
-      let finalModule = materialModule;
-      const presetKeys = materialModule.preset ? Object.keys(materialModule.preset) : [];
-      if (activeMaterialType === "WOOD" && !presetKeys.includes("WOOD")) {
-        // Force re-resolution
-        const correctModule = materialType.getActiveMaterialModule();
-        if (correctModule && Object.keys(correctModule.preset).includes("WOOD")) {
-          finalModule = correctModule;
-        } else {
-          const err = `Failed to resolve correct WOOD module. Got preset keys: ${presetKeys}`;
-          setError(err);
-          setLoading(false);
-          if (onError) onError(err);
-          return;
-        }
-      }
-      
-      materialType.materialModuleRef.current = finalModule;
+      materialType.materialModuleRef.current = materialModule;
 
       // Create MaterialProcessor
       try {
-        const materialProcessor = createMaterialProcessor(finalModule, renderer);
+        const materialProcessor = createMaterialProcessor(materialModule, renderer);
         materialProcessorRef.current = materialProcessor;
 
         // Apply default lighting
@@ -921,18 +777,6 @@ export function useArtworkViewer({
               meshVisibilityHook.setMeshes(meshList);
 
               // Process materials
-              // ✅ CRITICAL VALIDATION: Ensure module preset matches activeType
-              const currentModule = materialType.materialModuleRef?.current;
-              const presetKeys = currentModule?.preset ? Object.keys(currentModule.preset) : [];
-              if (activeMaterialType === "WOOD" && !presetKeys.includes("WOOD")) {
-                // Force re-resolution of module
-                const correctModule = materialType.getActiveMaterialModule();
-                if (correctModule) {
-                  materialType.materialModuleRef.current = correctModule;
-                  materialProcessorRef.current.setMaterialModule(correctModule);
-                }
-              }
-              
               const processOptions = {
                 materialType: activeMaterialType,
                 metalFinish: lighting.metalFinish,
@@ -1738,7 +1582,7 @@ export function useArtworkViewer({
       }
       
       if (!orientation) {
-        throw new Error("orientation is required. Please provide 'portrait', 'landscape', 'surfboard', or 'skateboard'");
+        throw new Error("orientation is required. Please provide 'portrait' or 'landscape'");
       }
       
       if (!newMaterialType) {
@@ -1746,22 +1590,8 @@ export function useArtworkViewer({
       }
 
       // Validate orientation
-      const validOrientations = [
-        ORIENTATION_TYPES.PORTRAIT,
-        ORIENTATION_TYPES.LANDSCAPE,
-        ORIENTATION_TYPES.SURFBOARD,
-        ORIENTATION_TYPES.SKATEBOARD,
-      ];
-      if (!validOrientations.includes(orientation)) {
-        throw new Error(`Invalid orientation: ${orientation}. Must be one of: ${validOrientations.join(', ')}`);
-      }
-
-      // Validate that Surfboard and Skateboard are only used with ACRYLIC
-      if ((orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD)) {
-        const { internalType } = getMaterialTypeInfo(newMaterialType);
-        if (internalType !== "ACRYLIC") {
-          throw new Error(`${orientation} orientation is only available for ACRYLIC material type`);
-        }
+      if (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE) {
+        throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
       }
 
       // 1. Set material type first (before model load if needed)
@@ -1781,18 +1611,9 @@ export function useArtworkViewer({
       // Calculate size ratio for model scaling if size is provided
       let sizeRatio = null;
       if (size && size.width && size.height) {
-        let defaultSize;
-        if (orientation === ORIENTATION_TYPES.PORTRAIT) {
-          defaultSize = DEFAULT_SIZES.PORTRAIT;
-        } else if (orientation === ORIENTATION_TYPES.LANDSCAPE) {
-          defaultSize = DEFAULT_SIZES.LANDSCAPE;
-        } else if (orientation === ORIENTATION_TYPES.SURFBOARD) {
-          defaultSize = DEFAULT_SIZES.SURFBOARD;
-        } else if (orientation === ORIENTATION_TYPES.SKATEBOARD) {
-          defaultSize = DEFAULT_SIZES.SKATEBOARD;
-        } else {
-          defaultSize = DEFAULT_SIZES.PORTRAIT; // fallback
-        }
+        const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
+          ? DEFAULT_SIZES.PORTRAIT 
+          : DEFAULT_SIZES.LANDSCAPE;
         sizeRatio = {
           widthRatio: size.width / defaultSize.width,
           heightRatio: size.height / defaultSize.height,
@@ -1837,26 +1658,10 @@ export function useArtworkViewer({
         }
 
         // ✅ IMPORTANT: Force module resolution now and mark as ready
-        let materialModule = materialType.getActiveMaterialModule();
+        const materialModule = materialType.getActiveMaterialModule();
         if (!materialModule) {
           throw new Error(`Material module not found for type: ${activeMaterialType}`);
         }
-        
-        // ✅ CRITICAL VALIDATION: Ensure module preset matches activeType
-        // Use ref value as it's the most up-to-date
-        const actualActiveType = materialType.activeMaterialTypeRef?.current || activeMaterialType;
-        const presetKeys = materialModule.preset ? Object.keys(materialModule.preset) : [];
-        if (actualActiveType === "WOOD" && !presetKeys.includes("WOOD")) {
-          // Force re-resolution using ref value
-          const typeToUse = materialType.activeMaterialTypeRef?.current || activeMaterialType;
-          const correctModule = getMaterialModule(typeToUse);
-          if (correctModule && Object.keys(correctModule.preset).includes("WOOD")) {
-            materialModule = correctModule;
-          } else {
-            throw new Error(`Failed to resolve correct WOOD module. Got preset keys: ${presetKeys}`);
-          }
-        }
-        
         materialType.materialModuleRef.current = materialModule;
         pipelineRef.current.moduleReady = true;
 
@@ -1938,95 +1743,10 @@ export function useArtworkViewer({
 
               // Apply visibility relationships
               meshVisibilityManagerRef.current.applyVisibilityRelationships();
-              
-              // CRITICAL: Ensure back meshes are visible (especially for Surfboard/Skateboard)
-              // This is a safety check to ensure back meshes are always visible
-              meshList.forEach(m => {
-                if (m.meshType === "acrylicBack" || m.meshType === "back") {
-                  if (m.mesh) {
-                    m.mesh.visible = true;
-                  }
-                  m.visible = true;
-                }
-              });
-              
-              // Special handling for Surfboard/Skateboard: Make "Base" mesh completely white
-              if (orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) {
-                loadedModel.traverse((obj) => {
-                  if (!obj.isMesh || !obj.material) return;
-                  
-                  const meshName = (obj.name || "").toLowerCase();
-                  if (meshName === "base") {
-                    // Ensure it's visible
-                    obj.visible = true;
-                    
-                    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                    mats.forEach((mat) => {
-                      if (!mat) return;
-                      
-                      // Upgrade to StandardMaterial if needed
-                      if (!mat.isMeshStandardMaterial && !mat.isMeshPhysicalMaterial) {
-                        const upgraded = new THREE.MeshStandardMaterial();
-                        THREE.MeshStandardMaterial.prototype.copy.call(upgraded, mat);
-                        Object.assign(mat, upgraded);
-                      }
-                      
-                      // Completely white (pure white, no brightness multiplier)
-                      if (mat.color) mat.color.setRGB(1.0, 1.0, 1.0);
-                      
-                      // Matte finish
-                      if ("metalness" in mat) mat.metalness = 0.0;
-                      if ("roughness" in mat) mat.roughness = 0.8;
-                      
-                      // No reflections
-                      mat.envMap = null;
-                      if ("envMapIntensity" in mat) mat.envMapIntensity = 0.0;
-                      
-                      // Remove transmission/glass properties
-                      if (mat.isMeshPhysicalMaterial) {
-                        mat.transmission = 0;
-                        mat.thickness = 0;
-                        mat.ior = 1.0;
-                        mat.clearcoat = 0.0;
-                        mat.clearcoatRoughness = 1.0;
-                      }
-                      
-                      // Remove specular highlights
-                      if ("clearcoat" in mat) mat.clearcoat = 0.0;
-                      if ("clearcoatRoughness" in mat) mat.clearcoatRoughness = 1.0;
-                      if ("specularIntensity" in mat) mat.specularIntensity = 0.0;
-                      
-                      // Remove all texture maps for completely white appearance
-                      mat.map = null;
-                      mat.normalMap = null;
-                      mat.bumpMap = null;
-                      mat.roughnessMap = null;
-                      mat.metalnessMap = null;
-                      mat.aoMap = null;
-                      mat.emissiveMap = null;
-                      
-                      mat.toneMapped = true;
-                      mat.needsUpdate = true;
-                    });
-                  }
-                });
-              }
 
               meshVisibilityHook.setMeshes(meshList);
 
               // Process materials (this creates texture layers)
-              // ✅ CRITICAL VALIDATION: Ensure module preset matches activeType
-              const currentModule = materialType.materialModuleRef?.current;
-              const presetKeys = currentModule?.preset ? Object.keys(currentModule.preset) : [];
-              if (activeMaterialType === "WOOD" && !presetKeys.includes("WOOD")) {
-                // Force re-resolution of module
-                const correctModule = materialType.getActiveMaterialModule();
-                if (correctModule) {
-                  materialType.materialModuleRef.current = correctModule;
-                  materialProcessorRef.current.setMaterialModule(correctModule);
-                }
-              }
-              
               const processOptions = {
                 materialType: activeMaterialType,
                 metalFinish: lighting.metalFinish,
@@ -2142,86 +1862,55 @@ export function useArtworkViewer({
       // 3. Apply artwork texture - load once and apply to both modes
       // This optimizes by loading the texture only once and reusing it for both fullBleed and shrunk
       if (artworkTexture) {
-        // Wait a bit for texture layers to be processed (especially for new model types)
-        // This ensures texture layers are available before we try to apply textures
-        let attempts = 0;
-        let allLayers = textureLayersHook.allTextureLayersRef.current || [];
-        while ((!allLayers || allLayers.length === 0) && attempts < 10) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-          allLayers = textureLayersHook.allTextureLayersRef.current || [];
-          attempts++;
-        }
-
+        const allLayers = textureLayersHook.allTextureLayersRef.current || [];
         const fullBleedLayer = allLayers.find(l => l.meshType === MODE_TYPES.FULL_BLEED);
         const shrunkLayer = allLayers.find(l => l.meshType === MODE_TYPES.SHRUNK);
 
-        // For Surfboard and Skateboard, they might only have one mesh or different naming
-        // Check if there are any texture layers at all
         if (!fullBleedLayer && !shrunkLayer) {
-          // If we have any layers, try to use the first one (might be a single mesh model)
-          if (allLayers.length > 0) {
-            // For single-mesh models like Surfboard/Skateboard, use the first available layer
-            const firstLayer = allLayers[0];
-            if (process.env.NODE_ENV === 'development') {
-              console.log(`[setup] Using first available layer for ${orientation}:`, firstLayer.meshName);
-            }
-            // Apply texture to the first available layer
-            try {
-              await updateArtwork(artworkTexture, firstLayer.meshType || MODE_TYPES.FULL_BLEED);
-            } catch (textureError) {
+          throw new Error("No artwork layers found. Make sure model is loaded.");
+        }
+
+        // Determine which mode to apply first (use initialMode or default to fullBleed)
+        const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
+        
+        // Load texture once and apply to priority mode immediately
+        // The texture will be cached by TextureManager, so the second call will use the cache
+        try {
+          if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
+            await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
+          } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
+            await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
+          }
+        } catch (textureError) {
+          // ✅ Handle texture loading errors gracefully (e.g., revoked blob URLs)
+          // Don't fail the entire setup if texture loading fails
+          if (process.env.NODE_ENV === 'development') {
+            console.warn("[setup] Failed to load artwork texture:", textureError);
+          }
+          // Continue setup even if texture fails - user can retry later
+        }
+        
+        // Apply to the other mode - texture is already cached, so this is fast
+        // Defer slightly to allow initial render, but no network request needed
+        const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
+        if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
+          // Texture is cached, so this will be fast - just apply to the other mesh
+          setTimeout(() => {
+            updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
+              // ✅ Handle texture loading errors gracefully (e.g., revoked blob URLs)
               if (process.env.NODE_ENV === 'development') {
-                console.warn("[setup] Failed to load artwork texture:", textureError);
+                console.warn('Failed to apply texture to deferred mode:', err);
               }
-            }
-            // Skip the rest of the texture application logic for single-mesh models
-            // Continue with the rest of setup (frame texture, etc.) - don't return early
-          } else {
-            throw new Error("No artwork layers found. Make sure model is loaded.");
-          }
-        } else {
-          // Standard multi-mode models (Portrait/Landscape) - apply to both fullBleed and shrunk
-          // Determine which mode to apply first (use initialMode or default to fullBleed)
-          const priorityMode = initialMode || MODE_TYPES.FULL_BLEED;
-          
-          // Load texture once and apply to priority mode immediately
-          // The texture will be cached by TextureManager, so the second call will use the cache
-          try {
-            if (priorityMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-              await updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED);
-            } else if (priorityMode === MODE_TYPES.SHRUNK && shrunkLayer) {
-              await updateArtwork(artworkTexture, MODE_TYPES.SHRUNK);
-            }
-          } catch (textureError) {
-            // ✅ Handle texture loading errors gracefully (e.g., revoked blob URLs)
-            // Don't fail the entire setup if texture loading fails
-            if (process.env.NODE_ENV === 'development') {
-              console.warn("[setup] Failed to load artwork texture:", textureError);
-            }
-            // Continue setup even if texture fails - user can retry later
-          }
-          
-          // Apply to the other mode - texture is already cached, so this is fast
-          // Defer slightly to allow initial render, but no network request needed
-          const otherMode = priorityMode === MODE_TYPES.FULL_BLEED ? MODE_TYPES.SHRUNK : MODE_TYPES.FULL_BLEED;
-          if (otherMode === MODE_TYPES.FULL_BLEED && fullBleedLayer) {
-            // Texture is cached, so this will be fast - just apply to the other mesh
-            setTimeout(() => {
-              updateArtwork(artworkTexture, MODE_TYPES.FULL_BLEED).catch(err => {
-                // ✅ Handle texture loading errors gracefully (e.g., revoked blob URLs)
-                if (process.env.NODE_ENV === 'development') {
-                  console.warn('Failed to apply texture to deferred mode:', err);
-                }
-              });
-            }, 50); // Reduced delay since texture is cached
-          } else if (otherMode === MODE_TYPES.SHRUNK && shrunkLayer) {
-            setTimeout(() => {
-              updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
-                if (process.env.NODE_ENV === 'development') {
-                  console.warn('Failed to apply texture to deferred mode:', err);
-                }
-              });
-            }, 50); // Reduced delay since texture is cached
-          }
+            });
+          }, 50); // Reduced delay since texture is cached
+        } else if (otherMode === MODE_TYPES.SHRUNK && shrunkLayer) {
+          setTimeout(() => {
+            updateArtwork(artworkTexture, MODE_TYPES.SHRUNK).catch(err => {
+              if (process.env.NODE_ENV === 'development') {
+                console.warn('Failed to apply texture to deferred mode:', err);
+              }
+            });
+          }, 50); // Reduced delay since texture is cached
         }
       }
 

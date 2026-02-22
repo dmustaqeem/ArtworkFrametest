@@ -320,6 +320,9 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
         if ("specularIntensity" in m) m.specularIntensity = 0.0;
         // Ensure no direct envMap is used on artwork
         m.envMap = null;
+        // ✅ Lock artwork materials to prevent generic passes from overwriting
+        m.userData = m.userData || {};
+        m.userData.__lockSystem = "ACRYLIC";
         m.needsUpdate = true;
       });
       return;
@@ -351,13 +354,19 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
         }
 
         // reflections
-        if (envMap) pm.envMap = envMap;
+        // ✅ Use envMap if provided, otherwise use scene.environment (set envMap = null)
+        if (envMap) {
+          pm.envMap = envMap;
+        } else {
+          pm.envMap = null; // Will use scene.environment (set by EnvironmentManager)
+        }
         // ✅ CRITICAL FIX: Use base intensity * reflectionIntensity, not just reflectionIntensity
         // Glass preset has envBase: 1.6, so use that as base
         const glassBase = pm.userData?.__baseEnvIntensity ?? 1.6;
         pm.envMapIntensity = glassBase * reflectionIntensity;
-        // Ensure base is stored for future updates
+        // ✅ Ensure base is stored and material is locked for future updates
         pm.userData = pm.userData || {};
+        pm.userData.__lockSystem = "ACRYLIC"; // ✅ Lock to prevent generic passes from overwriting
         pm.userData.__baseEnvIntensity = glassBase;
 
         // CRITICAL: Zero roughness for optical clarity (no transmission blur)
