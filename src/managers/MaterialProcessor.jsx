@@ -302,14 +302,17 @@ export class MaterialProcessor {
         });
 
         // Detect texture layers (only 'map' for artwork)
-        // Check if material has a map or if it's a metal fullBleed/shrunk (which may have map removed)
+        // Check if material has a map or if it's a metal/acrylic fullBleed/shrunk (which may have map removed)
         const hasMap = !!updatedMat.map;
         const isMetalFullBleedOrShrunk = (materialType === "METAL" || materialType === "METAL_BOX") &&
           (meshType === "fullBleed" || meshType === "shrunk" ||
            meshType === "silverFullBleed" || meshType === "silverShrunk" ||
            meshType === "whiteMetalFullBleed" || meshType === "whiteMetalShrunk");
+        // For acrylic materials (surfboard/skateboard), always include fullBleed/shrunk meshes as texture layers
+        const isAcrylicFullBleedOrShrunk = (materialType === "ACRYLIC") &&
+          (meshType === "fullBleed" || meshType === "shrunk");
 
-        if (hasMap || isMetalFullBleedOrShrunk) {
+        if (hasMap || isMetalFullBleedOrShrunk || isAcrylicFullBleedOrShrunk) {
           const layerId = `layer_${layerIdCounter++}`;
           textureLayers.push({
             id: layerId,

@@ -290,8 +290,11 @@ export function useArtworkViewer({
       const isArtwork =
         name === "artwork_fullbleed" ||
         name === "artwork_shrunk" ||
+        name === "front_art" ||
         (name.includes("artwork") &&
-          (name.includes("fullbleed") || name.includes("full_bleed") || name.includes("shrunk")));
+          (name.includes("fullbleed") || name.includes("full_bleed") || name.includes("shrunk"))) ||
+        (name === "front_art" || name === "frontart" || 
+         (name.includes("front") && name.includes("art")));
 
       const isGlass =
         name === "glass" ||
@@ -299,6 +302,9 @@ export function useArtworkViewer({
 
       // Artwork: reflective with clearcoat (HDR reflections) but colors stay sharp
       if (isArtwork) {
+        // Set render order: artwork renders in middle (below glass, above base)
+        obj.renderOrder = 1;
+        
         mats.forEach((m) => {
           if (!m) return;
           
@@ -348,6 +354,9 @@ export function useArtworkViewer({
 
       // Glass: visible but transparent, non-reflective, doesn't affect artwork
       if (isGlass) {
+        // Set render order: glass renders on top (front) - CRITICAL for correct layering
+        obj.renderOrder = 2;
+        
         mats.forEach((m) => {
           if (!m) return;
           
@@ -390,6 +399,12 @@ export function useArtworkViewer({
           
           m.needsUpdate = true;
         });
+        return; // Glass processed
+      }
+      
+      // Other meshes (Base, etc.) - set render order to back
+      if (!isArtwork && !isGlass) {
+        obj.renderOrder = 0;
       }
     });
   };
@@ -770,6 +785,27 @@ export function useArtworkViewer({
 
               // Collect meshes
               const meshList = meshVisibilityManager.collectMeshes(model);
+
+              // Print meshes for surfboard and skateboard (detect from modelPath)
+              if (modelPath && (modelPath.toLowerCase().includes('surfboard') || modelPath.toLowerCase().includes('skateboard'))) {
+                const detectedOrientation = modelPath.toLowerCase().includes('surfboard') ? 'surfboard' : 'skateboard';
+                console.log(`\n=== ${detectedOrientation.toUpperCase()} MESHES (from modelPath) ===`);
+                console.log(`Model Path: ${modelPath}`);
+                console.log(`Total meshes: ${meshList.length}`);
+                console.log('Mesh details:');
+                meshList.forEach((meshInfo, index) => {
+                  console.log(`  [${index + 1}] ${meshInfo.name}`);
+                  console.log(`      - ID: ${meshInfo.id}`);
+                  console.log(`      - Type: ${meshInfo.meshType}`);
+                  console.log(`      - Visible: ${meshInfo.visible}`);
+                  console.log(`      - Has Material: ${meshInfo.hasMaterial}`);
+                  if (meshInfo.mesh) {
+                    console.log(`      - Position: (${meshInfo.mesh.position.x.toFixed(2)}, ${meshInfo.mesh.position.y.toFixed(2)}, ${meshInfo.mesh.position.z.toFixed(2)})`);
+                    console.log(`      - Scale: (${meshInfo.mesh.scale.x.toFixed(2)}, ${meshInfo.mesh.scale.y.toFixed(2)}, ${meshInfo.mesh.scale.z.toFixed(2)})`);
+                  }
+                });
+                console.log(`=== END ${detectedOrientation.toUpperCase()} MESHES ===\n`);
+              }
 
               // Apply visibility relationships for all materials (including metals)
               meshVisibilityManager.applyVisibilityRelationships();
@@ -1590,8 +1626,14 @@ export function useArtworkViewer({
       }
 
       // Validate orientation
-      if (orientation !== ORIENTATION_TYPES.PORTRAIT && orientation !== ORIENTATION_TYPES.LANDSCAPE) {
-        throw new Error(`Invalid orientation: ${orientation}. Must be 'portrait' or 'landscape'`);
+      const validOrientations = [
+        ORIENTATION_TYPES.PORTRAIT,
+        ORIENTATION_TYPES.LANDSCAPE,
+        ORIENTATION_TYPES.SURFBOARD,
+        ORIENTATION_TYPES.SKATEBOARD,
+      ];
+      if (!validOrientations.includes(orientation)) {
+        throw new Error(`Invalid orientation: ${orientation}. Must be one of: ${validOrientations.join(', ')}`);
       }
 
       // 1. Set material type first (before model load if needed)
@@ -1611,9 +1653,18 @@ export function useArtworkViewer({
       // Calculate size ratio for model scaling if size is provided
       let sizeRatio = null;
       if (size && size.width && size.height) {
-        const defaultSize = orientation === ORIENTATION_TYPES.PORTRAIT 
-          ? DEFAULT_SIZES.PORTRAIT 
-          : DEFAULT_SIZES.LANDSCAPE;
+        let defaultSize;
+        if (orientation === ORIENTATION_TYPES.PORTRAIT) {
+          defaultSize = DEFAULT_SIZES.PORTRAIT;
+        } else if (orientation === ORIENTATION_TYPES.LANDSCAPE) {
+          defaultSize = DEFAULT_SIZES.LANDSCAPE;
+        } else if (orientation === ORIENTATION_TYPES.SURFBOARD) {
+          defaultSize = DEFAULT_SIZES.SURFBOARD;
+        } else if (orientation === ORIENTATION_TYPES.SKATEBOARD) {
+          defaultSize = DEFAULT_SIZES.SKATEBOARD;
+        } else {
+          defaultSize = DEFAULT_SIZES.PORTRAIT; // fallback
+        }
         sizeRatio = {
           widthRatio: size.width / defaultSize.width,
           heightRatio: size.height / defaultSize.height,
@@ -1741,6 +1792,25 @@ export function useArtworkViewer({
               // Collect meshes
               const meshList = meshVisibilityManagerRef.current.collectMeshes(loadedModel);
 
+              // Print meshes for surfboard and skateboard
+              if (orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) {
+                console.log(`\n=== ${orientation.toUpperCase()} MESHES ===`);
+                console.log(`Total meshes: ${meshList.length}`);
+                console.log('Mesh details:');
+                meshList.forEach((meshInfo, index) => {
+                  console.log(`  [${index + 1}] ${meshInfo.name}`);
+                  console.log(`      - ID: ${meshInfo.id}`);
+                  console.log(`      - Type: ${meshInfo.meshType}`);
+                  console.log(`      - Visible: ${meshInfo.visible}`);
+                  console.log(`      - Has Material: ${meshInfo.hasMaterial}`);
+                  if (meshInfo.mesh) {
+                    console.log(`      - Position: (${meshInfo.mesh.position.x.toFixed(2)}, ${meshInfo.mesh.position.y.toFixed(2)}, ${meshInfo.mesh.position.z.toFixed(2)})`);
+                    console.log(`      - Scale: (${meshInfo.mesh.scale.x.toFixed(2)}, ${meshInfo.mesh.scale.y.toFixed(2)}, ${meshInfo.mesh.scale.z.toFixed(2)})`);
+                  }
+                });
+                console.log(`=== END ${orientation.toUpperCase()} MESHES ===\n`);
+              }
+
               // Apply visibility relationships
               meshVisibilityManagerRef.current.applyVisibilityRelationships();
 
@@ -1757,6 +1827,22 @@ export function useArtworkViewer({
 
               const { materialDetails, textureLayers: layers } =
                 materialProcessorRef.current.processModelMaterials(loadedModel, processOptions);
+
+              // Print texture layers for surfboard and skateboard
+              if (orientation === ORIENTATION_TYPES.SURFBOARD || orientation === ORIENTATION_TYPES.SKATEBOARD) {
+                console.log(`\n=== ${orientation.toUpperCase()} TEXTURE LAYERS ===`);
+                console.log(`Total texture layers: ${layers.length}`);
+                console.log('Texture layer details:');
+                layers.forEach((layer, index) => {
+                  console.log(`  [${index + 1}] ${layer.meshName}`);
+                  console.log(`      - ID: ${layer.id}`);
+                  console.log(`      - Mesh Type: ${layer.meshType}`);
+                  console.log(`      - Map Type: ${layer.mapType}`);
+                  console.log(`      - Has Original: ${layer.hasOriginal}`);
+                  console.log(`      - Material Category: ${layer.materialCategory}`);
+                });
+                console.log(`=== END ${orientation.toUpperCase()} TEXTURE LAYERS ===\n`);
+              }
 
               // ✅ Mark materials as processed
               pipelineRef.current.materialsProcessed = true;

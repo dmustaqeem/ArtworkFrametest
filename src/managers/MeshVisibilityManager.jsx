@@ -117,6 +117,11 @@ export class MeshVisibilityManager {
     else if (nameLower.includes('silver') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
       result = "silverFullBleed";
     }
+    // Check for surfboard/skateboard front art (Front_Art) - treat as fullBleed
+    else if (nameLower === 'front_art' || nameLower === 'frontart' || 
+             (nameLower.includes('front') && nameLower.includes('art'))) {
+      result = "fullBleed";
+    }
     // Check for artwork full bleed (Artwork_FullBleed)
     else if (nameLower.includes('artwork') && (nameLower.includes('fullbleed') || nameLower.includes('full_bleed'))) {
       result = "fullBleed";

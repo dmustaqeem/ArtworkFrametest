@@ -293,8 +293,11 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
     const objNameLower = objName.toLowerCase();
     const isArtworkFull =
       objName === "Artwork_FullBleed" ||
+      objName === "Front_Art" ||
       (objNameLower.includes("artwork") &&
-        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")));
+        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed"))) ||
+      (objNameLower === "front_art" || objNameLower === "frontart" || 
+       (objNameLower.includes("front") && objNameLower.includes("art")));
     const isArtworkShrunk =
       objName === "Artwork_Shrunk" ||
       (objNameLower.includes("artwork") &&
@@ -309,6 +312,9 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
 
     // ARTWORK: matte + no reflections (no emissive brightness)
     if (isArtwork) {
+      // Set render order: artwork renders in middle (below glass, above base)
+      obj.renderOrder = 1;
+      
       mats.forEach((m) => {
         // keep texture map but kill all env reflections and specular highlights
         if ("metalness" in m) m.metalness = 0.0;
@@ -339,7 +345,12 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
     // -------------------------
     // GLASS => GLOSSY + REFLECTIVE
     // -------------------------
-    if (obj.name === "Glass") {
+    // Check for glass mesh (case-insensitive to handle "Glass", "glass", etc.)
+    const isGlass = objNameLower === "glass" || objNameLower.includes("glass");
+    if (isGlass) {
+      // Set render order: glass renders on top (front)
+      obj.renderOrder = 2;
+      
       mats.forEach((m, idx) => {
         let pm = m;
 
@@ -389,7 +400,38 @@ export function applyArtworkMatteGlassGlossy(model, envMap, reflectionIntensity 
 
         pm.needsUpdate = true;
       });
+      return; // Glass processed, continue to next mesh
     }
+
+    // -------------------------
+    // OTHER MESHES (Base, etc.) => REFLECTIVE
+    // -------------------------
+    // Set render order: base and other meshes render at back
+    obj.renderOrder = 0;
+    
+    // For other meshes (like "Base"), apply reflections
+    // These should get environment reflections but not the special glass treatment
+    mats.forEach((m) => {
+      if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+        // Use envMap if provided, otherwise use scene.environment
+        if (envMap) {
+          m.envMap = envMap;
+        } else {
+          m.envMap = null; // Will use scene.environment (set by EnvironmentManager)
+        }
+        
+        // Apply reflection intensity
+        const baseIntensity = m.userData?.__baseEnvIntensity ?? 1.0;
+        m.envMapIntensity = baseIntensity * reflectionIntensity;
+        
+        // Store base intensity for future updates
+        m.userData = m.userData || {};
+        m.userData.__baseEnvIntensity = baseIntensity;
+        m.userData.__lockSystem = "ACRYLIC";
+        
+        m.needsUpdate = true;
+      }
+    });
   });
 }
 
@@ -455,8 +497,11 @@ export const updateAcrylicMaterials = (model, envMap, showReflections, reflectio
     const objNameLower = objName.toLowerCase();
     const isArtworkFull =
       objName === "Artwork_FullBleed" ||
+      objName === "Front_Art" ||
       (objNameLower.includes("artwork") &&
-        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed")));
+        (objNameLower.includes("fullbleed") || objNameLower.includes("full_bleed"))) ||
+      (objNameLower === "front_art" || objNameLower === "frontart" || 
+       (objNameLower.includes("front") && objNameLower.includes("art")));
     const isArtworkShrunk =
       objName === "Artwork_Shrunk" ||
       (objNameLower.includes("artwork") &&
@@ -553,7 +598,10 @@ export const updateAcrylicReflectionIntensity = (model, reflectionIntensity, bas
     // CRITICAL: Skip artwork layers and Acrylic_Back - they should stay matte with no reflections
     const objName = obj.name || "";
     const objNameLower = objName.toLowerCase();
-    const isArtwork = objName === "Artwork_FullBleed" || objName === "Artwork_Shrunk";
+    const isArtwork = objName === "Artwork_FullBleed" || objName === "Artwork_Shrunk" ||
+      objName === "Front_Art" ||
+      (objNameLower === "front_art" || objNameLower === "frontart" || 
+       (objNameLower.includes("front") && objNameLower.includes("art")));
     const isAcrylicBack = objName === "Acrylic_Back" || 
       (objNameLower.includes("acrylic") && objNameLower.includes("back")) ||
       // Surfboard and Skateboard models are only used with Acrylic, so their back meshes should be treated as acrylicBack
