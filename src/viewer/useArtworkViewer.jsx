@@ -2174,6 +2174,11 @@ export function useArtworkViewer({
      */
     setMaterialType: (type) => {
       materialType.setSelectedMaterialType(type);
+      // ✅ CRITICAL: Also update reflection intensity to material's default
+      // This ensures acrylic always gets its own reflection intensity, not inherited from previous type
+      const { internalType } = getMaterialTypeInfo(type);
+      const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
+      lighting.setReflectionIntensity(defaultReflectionIntensity);
     },
 
     // ============================================

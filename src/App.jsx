@@ -496,6 +496,9 @@ function App() {
     
     const defaultReflectionIntensity = getDefaultReflectionIntensity(internalType);
     setReflectionIntensity(defaultReflectionIntensity);
+    // ✅ CRITICAL: Also update viewer's lighting hook state so acrylic gets correct reflection intensity
+    // Without this, the effect in useMaterialUpdates uses stale lighting.reflectionIntensity
+    viewerRef.current?.setReflectionIntensity(defaultReflectionIntensity);
     
     // ✅ Don't auto-setup scene - user must click "Setup Scene" button
     // await reconfigureScene({ displayType });
